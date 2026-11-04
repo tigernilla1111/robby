@@ -29,7 +29,7 @@ Within a rule, the highest amount goes first, then the longest time since we sen
 - **Always apply:** quote not open, pending message for the phone, phone contacted within 48 hours on any quote, or quote rejected within that window.
 - **Skipped for rule 1:** minimum age, ladder wait, follow-up cap and give-up, because the customer reached out.
 
-**Day one is a backlog.** Nearly every open quote qualifies on the first run, so the ranking matters most. [exact count after Phase 2]
+**Day one is a backlog.** Nearly every open quote qualifies on the first run, so the ranking matters most. At the demo now 25 of the 27 open quotes qualify. One loses the per-phone collapse, and one matches no rule while in its ladder wait.
 
 **Considered, not built:** view time of day, reply channel, quote expiry, tech capacity, customer history, job type and seasonality.
 
