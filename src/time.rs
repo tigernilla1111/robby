@@ -15,6 +15,13 @@ pub fn format_ts(ts: i64) -> String {
         .to_string()
 }
 
+pub fn format_date(ts: i64) -> String {
+    DateTime::from_timestamp(ts, 0)
+        .expect("timestamp in chrono's range")
+        .format("%b %-d")
+        .to_string()
+}
+
 pub fn wall_clock() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -52,5 +59,11 @@ mod tests {
     fn format_round_trips() {
         let s = "2026-08-17T13:00:00Z";
         assert_eq!(format_ts(parse_ts(s).unwrap()), s);
+    }
+
+    #[test]
+    fn formats_short_dates() {
+        assert_eq!(format_date(parse_ts("2026-08-06T03:00:00Z").unwrap()), "Aug 6");
+        assert_eq!(format_date(parse_ts("2026-08-17T13:00:00Z").unwrap()), "Aug 17");
     }
 }

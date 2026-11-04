@@ -80,6 +80,7 @@ pub struct Facts {
     pub id: String,
     pub customer_name: String,
     pub phone: String,
+    pub tech_name: String,
     pub amount: f64,
     pub open: bool,
     pub created_at: i64,
@@ -109,21 +110,23 @@ impl Facts {
 pub fn load_facts(conn: &Connection, now: i64) -> rusqlite::Result<BTreeMap<String, Facts>> {
     let mut facts = BTreeMap::new();
     let mut stmt = conn.prepare(
-        "SELECT id, customer_name, customer_phone, amount, status, created_at, last_contact_at
+        "SELECT id, customer_name, customer_phone, tech_name, amount, status, created_at,
+                last_contact_at
          FROM quotes",
     )?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let id: String = row.get(0)?;
-        let status: String = row.get(4)?;
-        let last_contact_at: Option<i64> = row.get(6)?;
+        let status: String = row.get(5)?;
+        let last_contact_at: Option<i64> = row.get(7)?;
         let quote = Facts {
             id: id.clone(),
             customer_name: row.get(1)?,
             phone: row.get(2)?,
-            amount: row.get(3)?,
+            tech_name: row.get(3)?,
+            amount: row.get(4)?,
             open: status == "open",
-            created_at: row.get(5)?,
+            created_at: row.get(6)?,
             sends: last_contact_at.into_iter().filter(|ts| *ts <= now).collect(),
             views: BTreeSet::new(),
             replies: BTreeSet::new(),
@@ -368,6 +371,7 @@ mod tests {
             id: id.to_string(),
             customer_name: "Ann".to_string(),
             phone: format!("+1{id}"),
+            tech_name: "Brad".to_string(),
             amount: 1000.0,
             open: true,
             created_at: NOW - 10 * DAY,

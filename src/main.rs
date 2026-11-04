@@ -1,4 +1,5 @@
 mod db;
+mod draft;
 mod ingest;
 mod policy;
 mod time;
@@ -30,6 +31,8 @@ enum Command {
     Ingest { path: PathBuf },
     /// List who to follow up with, and every suppressed quote with its reason
     Candidates,
+    /// Create one draft per candidate, skipping any phone with a pending message
+    Draft,
 }
 
 fn parse_now(s: &str) -> Result<i64, String> {
@@ -76,6 +79,19 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             }
             println!("suppressed: {}", suppressed.len());
             for (quote, outcome) in &suppressed {
+                println!("    {}", quote_line(quote, outcome, now));
+            }
+        }
+        Command::Draft => {
+            let (drafts, skipped) = draft::draft(&mut conn, &Policy::default(), now)?;
+            println!("drafted: {}", drafts.len());
+            for (rank, draft) in drafts.iter().enumerate() {
+                let line = quote_line(&draft.quote, &draft.outcome, now);
+                println!("{:>2}. #{:<3} {line}", rank + 1, draft.id);
+                println!("         {}", draft.body);
+            }
+            println!("skipped: {}", skipped.len());
+            for (quote, outcome) in &skipped {
                 println!("    {}", quote_line(quote, outcome, now));
             }
         }

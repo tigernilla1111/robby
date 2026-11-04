@@ -50,7 +50,7 @@ SQLite, with all timestamps stored as integer UTC seconds.
 
 **Message lifecycle.** A message starts as `draft`, moves to `approved`, then `sending`, and ends as `sent` or `failed`. A failed message retries with the same idempotency key. `rejected` and `cancelled` are the other end states. Each status change only applies if the row is still in the expected state, so two runs cannot both send it.
 
-**One pending message per phone.** Draft, approved, sending and failed all count as pending. The database enforces the limit with a partial unique index, so a bug in the code still cannot queue two texts to one customer.
+**One pending message per phone.** Draft, approved, sending and failed all count as pending. The database enforces the limit with a partial unique index, so a bug in the code still cannot queue two texts to one phone number.
 
 **Last contact is derived.** The seed's `last_contact_at` and `message_sent` events never agree, so neither is trusted alone. "Last sent" is the latest of those two and our own sent messages, and "sends" counts their distinct timestamps. Both are computed on read, so a new event corrects them automatically.
 
@@ -66,6 +66,8 @@ SQLite, with all timestamps stored as integer UTC seconds.
 - **Closing a quote cancels stuck sends:** ingest cancels every pending message on a closed quote, including one stuck in `sending`.
 - **Give up is display only:** nothing is written, and the quote stays open.
 - **Templates:** the shop name is a constant, and messages never quote a dollar amount.
+- **Drafts:** one per candidate. A rerun adds nothing for a phone with a pending message, because the policy suppresses it and the one-pending-per-phone index backs that up. A rejected or sent message can lead to a new draft once its wait ends, and a cancelled one once the quote reopens. The idempotency key is the quote plus the now the policy ran at. The quote date in a text uses a fixed New York offset, so a late-night winter quote can show the next day. A blank customer or tech name renders as "there" and "our team" rather than a broken greeting. The greeting uses the first word of the name, so a title or a surname-first name needs a human eye.
+- **Phones:** numbers are trimmed but not normalized, and every phone guardrail compares them as text. `+19175550000` and `(917) 555-0000` would count as two customers, so an import must use one format. The seed does.
 
 ## Running this for a parent company with 50 shops
 
@@ -90,7 +92,7 @@ The harder problem is people. Fifty owners won't all check their drafts every da
 4. A review pass to simplify the code
 5. Showing the customer's reply next to must-edit drafts
 6. More channels: email, then WhatsApp, Facebook Messenger and Discord
-7. Per-shop policy: wait times, attempt limits and give-up period
+7. Per-shop policy: wait times, attempt limits, give-up period and time zone
 8. Research into the best timing and wording, by type of trade
 9. Dynamic and multiple quote thresholds, so "big" scales with the business
 10. Auto-tuning the policy from each shop's own results
