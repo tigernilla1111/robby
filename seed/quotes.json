@@ -1,0 +1,302 @@
+[
+  {
+    "id": "Q-1000",
+    "customer_name": "Mike Reilly",
+    "customer_phone": "+19175552000",
+    "tech_name": "Brad",
+    "amount": 850,
+    "status": "open",
+    "created_at": "2026-08-08T03:00:00Z",
+    "last_contact_at": null
+  },
+  {
+    "id": "Q-1001",
+    "customer_name": "Susan Chen",
+    "customer_phone": "+19175552001",
+    "tech_name": "Jaden",
+    "amount": 2400,
+    "status": "open",
+    "created_at": "2026-08-03T22:00:00Z",
+    "last_contact_at": null
+  },
+  {
+    "id": "Q-1002",
+    "customer_name": "Dave Okafor",
+    "customer_phone": "+19175552002",
+    "tech_name": "Brad",
+    "amount": 12500,
+    "status": "open",
+    "created_at": "2026-08-08T13:00:00Z",
+    "last_contact_at": "2026-08-08T18:00:00Z"
+  },
+  {
+    "id": "Q-1003",
+    "customer_name": "Karen Nguyen",
+    "customer_phone": "+19175552003",
+    "tech_name": "Jaden",
+    "amount": 850,
+    "status": "open",
+    "created_at": "2026-08-01T15:00:00Z",
+    "last_contact_at": "2026-08-01T19:00:00Z"
+  },
+  {
+    "id": "Q-1004",
+    "customer_name": "Tom Kowalski",
+    "customer_phone": "+19175552004",
+    "tech_name": "Jose M.",
+    "amount": 2400,
+    "status": "accepted",
+    "created_at": "2026-08-07T07:00:00Z",
+    "last_contact_at": "2026-08-09T17:00:00Z"
+  },
+  {
+    "id": "Q-1005",
+    "customer_name": "Linda Rivera",
+    "customer_phone": "+19175552005",
+    "tech_name": "Brad",
+    "amount": 3800,
+    "status": "open",
+    "created_at": "2026-08-07T14:00:00Z",
+    "last_contact_at": null
+  },
+  {
+    "id": "Q-1006",
+    "customer_name": "Jose Thompson",
+    "customer_phone": "+19175552006",
+    "tech_name": "Zach",
+    "amount": 7500,
+    "status": "open",
+    "created_at": "2026-08-03T00:00:00Z",
+    "last_contact_at": "2026-08-04T04:00:00Z"
+  },
+  {
+    "id": "Q-1007",
+    "customer_name": "Emily Patel",
+    "customer_phone": "+19175552007",
+    "tech_name": "Brad",
+    "amount": 5200,
+    "status": "open",
+    "created_at": "2026-08-09T11:00:00Z",
+    "last_contact_at": "2026-08-10T00:00:00Z"
+  },
+  {
+    "id": "Q-1008",
+    "customer_name": "Frank Marino",
+    "customer_phone": "+19175552008",
+    "tech_name": "Jose M.",
+    "amount": 5200,
+    "status": "open",
+    "created_at": "2026-08-05T03:00:00Z",
+    "last_contact_at": "2026-08-05T09:00:00Z"
+  },
+  {
+    "id": "Q-1009",
+    "customer_name": "Nancy Schmidt",
+    "customer_phone": "+19175552009",
+    "tech_name": "Jose M.",
+    "amount": 9800,
+    "status": "dismissed",
+    "created_at": "2026-08-09T02:00:00Z",
+    "last_contact_at": "2026-08-11T03:00:00Z"
+  },
+  {
+    "id": "Q-1010",
+    "customer_name": "Bill Boone",
+    "customer_phone": "+19175552010",
+    "tech_name": "Zach",
+    "amount": 12500,
+    "status": "open",
+    "created_at": "2026-08-02T04:00:00Z",
+    "last_contact_at": null
+  },
+  {
+    "id": "Q-1011",
+    "customer_name": "Rachel Ferreira",
+    "customer_phone": "+19175552011",
+    "tech_name": "Jose M.",
+    "amount": 5200,
+    "status": "open",
+    "created_at": "2026-08-07T22:00:00Z",
+    "last_contact_at": "2026-08-08T07:00:00Z"
+  },
+  {
+    "id": "Q-1012",
+    "customer_name": "Carl Dawson",
+    "customer_phone": "+19175552012",
+    "tech_name": "Jaden",
+    "amount": 18000,
+    "status": "open",
+    "created_at": "2026-08-01T19:00:00Z",
+    "last_contact_at": null
+  },
+  {
+    "id": "Q-1013",
+    "customer_name": "Diane Lugo",
+    "customer_phone": "+19175552013",
+    "tech_name": "Brad",
+    "amount": 2400,
+    "status": "open",
+    "created_at": "2026-08-02T04:00:00Z",
+    "last_contact_at": "2026-08-04T15:00:00Z"
+  },
+  {
+    "id": "Q-1014",
+    "customer_name": "Pete Whitman",
+    "customer_phone": "+19175552014",
+    "tech_name": "Jaden",
+    "amount": 5200,
+    "status": "open",
+    "created_at": "2026-08-08T02:00:00Z",
+    "last_contact_at": "2026-08-09T05:00:00Z"
+  },
+  {
+    "id": "Q-1015",
+    "customer_name": "Angela Ortiz",
+    "customer_phone": "+19175552015",
+    "tech_name": "Brad",
+    "amount": 3800,
+    "status": "open",
+    "created_at": "2026-08-08T11:00:00Z",
+    "last_contact_at": null
+  },
+  {
+    "id": "Q-1016",
+    "customer_name": "Ray Klein",
+    "customer_phone": "+19175552016",
+    "tech_name": "Jaden",
+    "amount": 12500,
+    "status": "open",
+    "created_at": "2026-08-03T03:00:00Z",
+    "last_contact_at": "2026-08-05T04:00:00Z"
+  },
+  {
+    "id": "Q-1017",
+    "customer_name": "Holly Mabry",
+    "customer_phone": "+19175552017",
+    "tech_name": "Jose M.",
+    "amount": 22000,
+    "status": "accepted",
+    "created_at": "2026-08-04T05:00:00Z",
+    "last_contact_at": "2026-08-05T23:00:00Z"
+  },
+  {
+    "id": "Q-1018",
+    "customer_name": "Stan Pruitt",
+    "customer_phone": "+19175552018",
+    "tech_name": "Jaden",
+    "amount": 420,
+    "status": "open",
+    "created_at": "2026-08-10T07:00:00Z",
+    "last_contact_at": null
+  },
+  {
+    "id": "Q-1019",
+    "customer_name": "Gloria Sano",
+    "customer_phone": "+19175552019",
+    "tech_name": "Ridge",
+    "amount": 5200,
+    "status": "open",
+    "created_at": "2026-08-09T22:00:00Z",
+    "last_contact_at": "2026-08-11T02:00:00Z"
+  },
+  {
+    "id": "Q-1020",
+    "customer_name": "Walt Herrera",
+    "customer_phone": "+19175552020",
+    "tech_name": "Zach",
+    "amount": 18000,
+    "status": "open",
+    "created_at": "2026-08-11T01:00:00Z",
+    "last_contact_at": "2026-08-13T17:00:00Z"
+  },
+  {
+    "id": "Q-1021",
+    "customer_name": "Judy Faulk",
+    "customer_phone": "+19175552021",
+    "tech_name": "Ridge",
+    "amount": 22000,
+    "status": "open",
+    "created_at": "2026-08-05T13:00:00Z",
+    "last_contact_at": "2026-08-06T07:00:00Z"
+  },
+  {
+    "id": "Q-1022",
+    "customer_name": "Ned Diaz",
+    "customer_phone": "+19175552022",
+    "tech_name": "Jose M.",
+    "amount": 12500,
+    "status": "open",
+    "created_at": "2026-08-03T23:00:00Z",
+    "last_contact_at": "2026-08-06T06:00:00Z"
+  },
+  {
+    "id": "Q-1023",
+    "customer_name": "Tina Grady",
+    "customer_phone": "+19175552023",
+    "tech_name": "Ridge",
+    "amount": 18000,
+    "status": "open",
+    "created_at": "2026-08-10T21:00:00Z",
+    "last_contact_at": "2026-08-11T15:00:00Z"
+  },
+  {
+    "id": "Q-1024",
+    "customer_name": "Gus Lam",
+    "customer_phone": "+19175552024",
+    "tech_name": "Brad",
+    "amount": 9800,
+    "status": "open",
+    "created_at": "2026-08-06T18:00:00Z",
+    "last_contact_at": null
+  },
+  {
+    "id": "Q-1025",
+    "customer_name": "Karen Nguyen",
+    "customer_phone": "+19175552003",
+    "tech_name": "Jaden",
+    "amount": 850,
+    "status": "open",
+    "created_at": "2026-08-10T12:00:00Z",
+    "last_contact_at": null
+  },
+  {
+    "id": "Q-1026",
+    "customer_name": "Hank Crane",
+    "customer_phone": "+19175552026",
+    "tech_name": "Ridge",
+    "amount": 22000,
+    "status": "open",
+    "created_at": "2026-08-09T18:00:00Z",
+    "last_contact_at": "2026-08-11T20:00:00Z"
+  },
+  {
+    "id": "Q-1027",
+    "customer_name": "Beth Vega",
+    "customer_phone": "+19175552027",
+    "tech_name": "Ridge",
+    "amount": 18000,
+    "status": "open",
+    "created_at": "2026-08-05T09:00:00Z",
+    "last_contact_at": "2026-08-08T08:00:00Z"
+  },
+  {
+    "id": "Q-1028",
+    "customer_name": "Sal Moss",
+    "customer_phone": "+19175552028",
+    "tech_name": "Brad",
+    "amount": 420,
+    "status": "open",
+    "created_at": "2026-08-10T12:00:00Z",
+    "last_contact_at": null
+  },
+  {
+    "id": "Q-1029",
+    "customer_name": "Wanda Quinn",
+    "customer_phone": "+19175552029",
+    "tech_name": "Zach",
+    "amount": 3800,
+    "status": "open",
+    "created_at": "2026-08-07T01:00:00Z",
+    "last_contact_at": "2026-08-09T09:00:00Z"
+  }
+]
