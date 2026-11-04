@@ -66,7 +66,7 @@ Knobs live in one `Policy` struct with defaults. Tests build their own. No CLI o
 
 ## Phase 3: Message drafting (MVP)
 
-- `draft --now`: one `INSERT OR IGNORE` per candidate. Rerun inserts nothing. A second quote on a phone with a pending message is skipped and listed.
+- `draft --now`: one insert per candidate that ignores duplicates. A rerun adds nothing for a phone with a pending message. A second quote on that phone is skipped and listed.
 - One SMS template per reason. Placeholders: first name, tech, quote date.
 - `unanswered_reply` gets a placeholder body and `must_edit = 1`.
 - Each row stores `reason`, `policy_now`, and a generated `idempotency_key`.
@@ -101,10 +101,11 @@ Knobs live in one `Policy` struct with defaults. Tests build their own. No CLI o
 5. Reply text: show "Customer said: ..." next to a must-edit draft when the event carries a body. Medium.
 6. Email and other channels: pick email when the customer's last reply was email; templates per channel; pending index and cooldown check extended to email address. Then other providers such as WhatsApp, Facebook Messenger and Discord behind the same `Sender` trait. Medium.
 7. Per-shop policy. Three choices a shop makes: wait between messages to the same customer, as `Constant(x days)` or `Exponential(x days)` doubling from x; max attempts, 0 to 100; give-up period, since eager shops wait longer. The MVP ladder stays as the default mode. Question for Robby: should there be a hard global cap so a shop cannot message a customer indefinitely? Medium.
-8. Follow-up research: find the most effective marketing techniques, covering the best waiting periods, the wording of a good follow-up message, and specialized values for the type of contract work a shop does. Medium.
-9. Outcome tracking: which reason and ladder step preceded each acceptance, to tune the ladder. Low-medium.
-10. `send_attempts` table with a retry cap. Low.
-11. Thin localhost page listing candidates and drafts with approve buttons. Low.
-12. Dynamic XL threshold as the top 10% of open quotes by amount, as a policy mode. Fixed thresholds stop discriminating once most deals clear $10k, ignore inflation, and percentages are an easy strategy lever. Low.
-13. Multiple quote thresholds: replace the single money-based reason with several tiers a shop can define, as dollar amounts and as percentages once item 12 lands. Low.
-14. Auto-tuning: use a shop's own outcomes to find the policy values that convert best, so the knobs in item 7 and the thresholds in item 12 are set empirically instead of by hand. Depends on item 9. Low.
+8. Shop time zone: an easy way for a shop to set its time zone, or have it detected and set automatically, replacing the fixed New York offset used for quote dates. Medium.
+9. Follow-up research: find the most effective marketing techniques, covering the best waiting periods, the wording of a good follow-up message, and specialized values for the type of contract work a shop does. Medium.
+10. Outcome tracking: which reason and ladder step preceded each acceptance, to tune the ladder. Low-medium.
+11. `send_attempts` table with a retry cap. Low.
+12. Thin localhost page listing candidates and drafts with approve buttons. Low.
+13. Dynamic XL threshold as the top 10% of open quotes by amount, as a policy mode. Fixed thresholds stop discriminating once most deals clear $10k, ignore inflation, and percentages are an easy strategy lever. Low.
+14. Multiple quote thresholds: replace the single money-based reason with several tiers a shop can define, as dollar amounts and as percentages once item 13 lands. Low.
+15. Auto-tuning: use a shop's own outcomes to find the policy values that convert best, so the knobs in item 7 and the thresholds in item 13 are set empirically instead of by hand. Depends on item 10. Low.
