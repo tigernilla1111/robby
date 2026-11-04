@@ -7,13 +7,15 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// `last_contact_at` only moves forward. Two-argument MAX is NULL if either side is, hence COALESCE.
 const UPSERT_QUOTE: &str = "
 INSERT INTO quotes (id, customer_name, customer_phone, tech_name, amount, status, created_at, last_contact_at)
 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
 ON CONFLICT(id) DO UPDATE SET
   customer_name = excluded.customer_name, customer_phone = excluded.customer_phone,
   tech_name = excluded.tech_name, amount = excluded.amount, status = excluded.status,
-  created_at = excluded.created_at, last_contact_at = excluded.last_contact_at";
+  created_at = excluded.created_at,
+  last_contact_at = COALESCE(MAX(quotes.last_contact_at, excluded.last_contact_at), quotes.last_contact_at, excluded.last_contact_at)";
 
 const INSERT_EVENT: &str =
     "INSERT OR IGNORE INTO events (event_id, type, quote_id, ts, raw) VALUES (?1, ?2, ?3, ?4, ?5)";
@@ -565,6 +567,31 @@ mod tests {
             parse_ts("2026-08-04T00:00:00Z").unwrap(),
         );
         assert_eq!(row, expected);
+    }
+
+    #[test]
+    fn reexport_never_moves_last_contact_back() {
+        let dir = temp_dir("last-contact");
+        let quotes = dir.join("quotes.json");
+        let mut conn = memory_db();
+        let mut reingest = |last_contact: &str| -> Option<i64> {
+            let field = format!(r#""last_contact_at":{last_contact},"status""#);
+            let quote = quote_json("Q-1", "open").replace(r#""status""#, &field);
+            fs::write(&quotes, format!("[{quote}]")).unwrap();
+            ingest(&mut conn, &quotes, NOW).unwrap();
+            conn.query_row("SELECT last_contact_at FROM quotes WHERE id = 'Q-1'", [], |row| row.get(0))
+                .unwrap()
+        };
+        let stored = parse_ts("2026-08-05T00:00:00Z");
+        let newer = parse_ts("2026-08-06T00:00:00Z");
+
+        assert_eq!(reingest("null"), None);
+        assert_eq!(reingest(r#""2026-08-05T00:00:00Z""#), stored);
+        assert_eq!(reingest("null"), stored);
+        assert_eq!(reingest(r#""2026-08-04T00:00:00Z""#), stored);
+        assert_eq!(reingest(r#""2026-08-06T00:00:00Z""#), newer);
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
