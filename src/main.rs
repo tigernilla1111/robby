@@ -1,7 +1,8 @@
 mod db;
+mod ingest;
 mod time;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::error::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -16,6 +17,15 @@ struct Cli {
     /// Current time, YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MMZ (default: wall clock)
     #[arg(long, global = true, value_parser = parse_now)]
     now: Option<i64>,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Load a seed directory, a .json quotes file or a .jsonl events file
+    Ingest { path: PathBuf },
 }
 
 fn parse_now(s: &str) -> Result<i64, String> {
@@ -26,7 +36,21 @@ fn parse_now(s: &str) -> Result<i64, String> {
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     let now = cli.now.unwrap_or_else(time::wall_clock);
     println!("now: {}", time::format_ts(now));
-    db::open(&cli.db)?;
+    let mut conn = db::open(&cli.db)?;
+    match cli.command {
+        Command::Ingest { path } => {
+            let counts = ingest::ingest(&mut conn, &path, now)?;
+            println!("quotes: {} stored, {} skipped", counts.quotes_stored, counts.quotes_skipped);
+            println!(
+                "events: {} stored, {} duplicates ignored, {} skipped",
+                counts.events_stored, counts.events_duplicate, counts.events_skipped
+            );
+            println!("promoted: {}, cancelled: {}", counts.promoted, counts.cancelled);
+            if let Some(days) = ingest::stale_days(&conn, now)? {
+                eprintln!("warning: newest event is {days} days before now");
+            }
+        }
+    }
     Ok(())
 }
 
