@@ -56,15 +56,44 @@ SQLite, with all timestamps stored as integer UTC seconds.
 
 ## Decisions and assumptions
 
-_TODO: status source of truth, handling of duplicate and out-of-order events, the extra quote_sent event type, what "now" defaults to._
+- **Status source of truth:** `quotes.json` is authoritative. A `quote_accepted` event promotes an open quote to accepted, never the reverse. Status is checked again at send time.
+- **Duplicates and ordering:** events dedupe on `event_id`, and nothing depends on file order. Ingesting the same data twice, or in a different order, gives the same stored rows.
+- **Bad input:** unparseable lines and missing fields are skipped and counted, never fatal. Events for unknown quotes are stored.
+- **Bad re-export:** if a later file has an invalid row for a stored quote, such as `"status": "Accepted"`, the row is skipped and the stored status stands. A closed quote could therefore stay open until a valid file arrives. The skip count and a stderr line show it.
+- **Promotion count:** `promoted` repeats on each re-ingest for a quote the file lists as open but that has an accepted event. The stored status stays correct.
+- **`quote_sent` events:** this type is not in the spec. It is stored but does not count as "we sent", because every seed quote has one and `never_contacted` could then never match.
+- **Now:** wall clock by default, with `--now` to override, and every command prints the time it used. The demo uses `2026-08-17T13:00:00Z`, 9am in New York. An earlier `--now` sees only events and `last_contact_at` up to that time, but our own sends always count, so a replay cannot forget a real send. Quote status is not time-aware.
+- **Closing a quote cancels stuck sends:** ingest cancels every pending message on a closed quote, including one stuck in `sending`.
+- **Give up is display only:** nothing is written, and the quote stays open.
+- **Templates:** the shop name is a constant, and messages never quote a dollar amount.
 
 ## Running this for a parent company with 50 shops
 
-_TODO: about two paragraphs, no code._
+Every shop gets its own settings and approval queue, all running on the same engine. Shops can tune their wait times and attempt limits, but the parent company sets the limits nobody can override, like opt-outs, quiet hours and a cap on messages per customer. All quotes and events flow into one central data store, which shows which follow-ups actually win jobs and lets us improve the defaults for everyone. If one shop's feed breaks, it shouldn't touch the other 49.
+
+The harder problem is people. Fifty owners won't all check their drafts every day, so each shop needs someone responsible for the queue, and drafts should expire instead of going out late. I'd start with two or three shops and keep human approval on everywhere. Once the data shows which messages rarely need editing, those could start sending automatically.
 
 ## What I'd build next
 
-_TODO_
+**Before any real customer gets a text:**
+
+- An opt-out footer and handling for STOP replies
+- Quiet hours in the customer's time zone
+- A retry cap on failed sends
+- Outcome tracking, to see which reasons and wait times lead to accepted quotes
+
+**Then, in priority order:**
+
+1. An interactive review loop: yes, no or edit for each draft, in the terminal first and later on a simple localhost page
+2. A central data store for all quotes and events, to find better ways to prioritize clients, plus an admin portal for one person running several shops
+3. Automated orchestration, possibly an LLM that tailors, audits and approves messages
+4. A review pass to simplify the code
+5. Showing the customer's reply next to must-edit drafts
+6. More channels: email, then WhatsApp, Facebook Messenger and Discord
+7. Per-shop policy: wait times, attempt limits and give-up period
+8. Research into the best timing and wording, by type of trade
+9. Dynamic and multiple quote thresholds, so "big" scales with the business
+10. Auto-tuning the policy from each shop's own results
 
 ## Where I stopped
 
