@@ -1,10 +1,12 @@
 mod db;
 mod draft;
 mod ingest;
+mod messages;
 mod policy;
 mod time;
 
 use clap::{Parser, Subcommand};
+use messages::{Delivery, FakeSender, Message};
 use policy::{DAY, Facts, Outcome, Policy};
 use std::error::Error;
 use std::path::PathBuf;
@@ -33,6 +35,25 @@ enum Command {
     Candidates,
     /// Create one draft per candidate, skipping any phone with a pending message
     Draft,
+    /// Approve one message, or with --all every draft that needs no edit
+    Approve {
+        #[arg(required_unless_present = "all")]
+        id: Option<i64>,
+        /// Approve every draft that needs no edit
+        #[arg(long, conflicts_with = "id")]
+        all: bool,
+        /// Replace the text; a must-edit draft requires this
+        #[arg(long, conflicts_with = "all", allow_hyphen_values = true)]
+        body: Option<String>,
+    },
+    /// Reject a draft or approved message
+    Reject { id: i64 },
+    /// Recheck every approved or failed message, then send it
+    Send {
+        /// Lose the provider's ack for this quote, after it stored the text
+        #[arg(long, value_name = "QUOTE")]
+        fail: Option<String>,
+    },
 }
 
 fn parse_now(s: &str) -> Result<i64, String> {
@@ -57,10 +78,15 @@ fn quote_line(quote: &Facts, outcome: &Outcome, now: i64) -> String {
     )
 }
 
-fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
+fn message_line(msg: &Message) -> String {
+    format!("#{:<3} {:<7} {:<13} {}", msg.id, msg.quote_id, msg.phone, msg.reason)
+}
+
+fn run(cli: Cli) -> Result<ExitCode, Box<dyn Error>> {
     let now = cli.now.unwrap_or_else(time::wall_clock);
     println!("now: {}", time::format_ts(now));
     let mut conn = db::open(&cli.db)?;
+    let mut exit = ExitCode::SUCCESS;
     match cli.command {
         Command::Ingest { path } => {
             let counts = ingest::ingest(&mut conn, &path, now)?;
@@ -95,16 +121,60 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 println!("    {}", quote_line(quote, outcome, now));
             }
         }
+        Command::Approve { id: Some(id), body, .. } => {
+            messages::approve(&conn, id, body.as_deref(), now)?;
+            println!("approved #{id}");
+        }
+        Command::Approve { .. } => {
+            let (approved, need_edit) = messages::approve_all(&conn, now)?;
+            println!("approved: {}", approved.len());
+            for msg in &approved {
+                println!(" {}", message_line(msg));
+            }
+            println!("need edit: {}", need_edit.len());
+            for msg in &need_edit {
+                println!(" {}", message_line(msg));
+            }
+        }
+        Command::Reject { id } => {
+            messages::reject(&conn, id, now)?;
+            println!("rejected #{id}");
+        }
+        Command::Send { fail } => {
+            let sender = FakeSender { conn: &conn, now, fail };
+            let (mut sent, mut failed, mut cancelled) = (0, 0, 0);
+            for (msg, delivery) in messages::send(&conn, &Policy::default(), &sender, now)? {
+                let line = message_line(&msg);
+                match delivery {
+                    Delivery::Sent(provider_id) => {
+                        sent += 1;
+                        println!("sent       {line}  {provider_id}");
+                    }
+                    Delivery::Failed(error) => {
+                        failed += 1;
+                        println!("failed     {line}  {error}");
+                    }
+                    Delivery::Cancelled(reason) => {
+                        cancelled += 1;
+                        println!("cancelled  {line}  {reason}");
+                    }
+                }
+            }
+            println!("sent: {sent}, failed: {failed}, cancelled: {cancelled}");
+            if failed > 0 {
+                exit = ExitCode::FAILURE;
+            }
+        }
     }
     if let Some(days) = ingest::stale_days(&conn, now)? {
         eprintln!("warning: newest event is {days} days before now");
     }
-    Ok(())
+    Ok(exit)
 }
 
 fn main() -> ExitCode {
     match run(Cli::parse()) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(exit) => exit,
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::FAILURE

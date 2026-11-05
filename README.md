@@ -26,7 +26,8 @@ Within a rule, the highest amount goes first, then the longest time since we sen
 
 **Suppressions.** Each suppressed quote shows its reason.
 
-- **Always apply:** quote not open, pending message for the phone, phone contacted within 48 hours on any quote, or quote rejected within that window.
+- **Always apply:** quote not open, pending message for the phone, or quote rejected within 48 hours.
+- **Applies to everything except rule 1:** phone contacted within 48 hours on any quote.
 - **Skipped for rule 1:** minimum age, ladder wait, follow-up cap and give-up, because the customer reached out.
 
 **Day one is a backlog.** Nearly every open quote qualifies on the first run, so the ranking matters most. At the demo now 25 of the 27 open quotes qualify. One loses the per-phone collapse, and one matches no rule while in its ladder wait.
@@ -35,7 +36,18 @@ Within a rule, the highest amount goes first, then the longest time since we sen
 
 ## Guardrails
 
-_TODO: cooldown per customer phone, closed quotes, no double-send on rerun or retry, must-edit drafts for unanswered replies._
+The cooldown, closed-quote and reply guardrails are checked when the policy picks candidates and again by `send`, against the database as it is at that moment.
+
+- **One text per customer per 48 hours.** "Last sent" to a phone is the newest of the seed's `last_contact_at`, outbound `message_sent` events and our own sent messages, across every quote on that number. A phone inside the window is never a candidate, and `send` cancels an approved message if a send to that phone has appeared since, or if the quote's number has changed since it was drafted. The one exception is answering a customer's reply: the cooldown limits outreach the shop starts, and a person writing back is not outreach. The reply goes through the must-edit path, and once our send answers it the rule stops matching, so it cannot loop.
+- **Never about a closed quote.** A quote that is accepted or dismissed in `quotes.json`, or has a `quote_accepted` event, is never a candidate. `ingest` cancels its pending messages, and `send` checks the status again before each message.
+- **Never a double send.** Drafting again creates nothing while a message is pending; the database allows one pending message per phone. `send` moves each message from `approved` to `sending` with a compare-and-swap, so two runs cannot both send it, then calls the provider with the idempotency key stored on the message. A failed send is retried with the same key: the fake provider returns the original id, so a send whose acknowledgement was lost still ends as one delivered text. A message stuck in `sending` is never retried by the engine. Closing its quote cancels it; otherwise clearing one takes a database edit.
+- **A reply is never answered by a template.** A customer whose last reply is after our last send gets an `unanswered_reply` draft: a placeholder that `approve` refuses without `--body` and that `approve --all` skips. If a reply on any open quote on that phone is later than our last send on that quote, `send` cancels the message rather than send a nudge over theirs.
+
+**Possibly delivered texts.** `send` stamps a message before calling the provider. If that message is later cancelled, the stamp still counts for the phone's cooldown, because the text may have arrived. A customer's reply can still be answered. It does not count as a follow-up on the ladder. A text that never arrived costs a 48-hour wait, and that is the safer mistake.
+
+`send` trusts `quotes.json` as ingested: a later export that omits a quote leaves it open. An earlier `--now` is replay, so it hides later events.
+
+**In production.** Twilio, or any provider, sits behind the same `Sender` trait. If the provider ignores client keys, a failed send is reconciled against the provider's log before any retry, never resent blind. The opt-out footer and quiet hours live in the sender, so no policy change can skip them.
 
 ## Data model
 
@@ -66,7 +78,7 @@ SQLite, with all timestamps stored as integer UTC seconds.
 - **Closing a quote cancels stuck sends:** ingest cancels every pending message on a closed quote, including one stuck in `sending`.
 - **Give up is display only:** nothing is written, and the quote stays open.
 - **Templates:** the shop name is a constant, and messages never quote a dollar amount.
-- **Drafts:** one per candidate. A rerun adds nothing for a phone with a pending message, because the policy suppresses it and the one-pending-per-phone index backs that up. A rejected or sent message can lead to a new draft once its wait ends, and a cancelled one once the quote reopens. The idempotency key is the quote plus the now the policy ran at. The quote date in a text uses a fixed New York offset, so a late-night winter quote can show the next day. A blank customer or tech name renders as "there" and "our team" rather than a broken greeting. The greeting uses the first word of the name, so a title or a surname-first name needs a human eye.
+- **Drafts:** one per candidate. A rerun adds nothing for a phone with a pending message, because the policy suppresses it and the one-pending-per-phone index backs that up. A rejected, sent or cancelled message can lead to a new draft once what stopped it clears. The idempotency key is the quote plus the now the policy ran at. The quote date in a text uses a fixed New York offset, so a late-night winter quote can show the next day. A blank customer or tech name renders as "there" and "our team" rather than a broken greeting. The greeting uses the first word of the name, so a title or a surname-first name needs a human eye.
 - **Phones:** numbers are trimmed but not normalized, and every phone guardrail compares them as text. `+19175550000` and `(917) 555-0000` would count as two customers, so an import must use one format. The seed does.
 
 ## Running this for a parent company with 50 shops

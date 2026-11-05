@@ -30,6 +30,12 @@ impl Default for Policy {
     }
 }
 
+impl Policy {
+    pub fn in_cooldown(&self, at: Option<i64>, now: i64) -> bool {
+        at.is_some_and(|at| now - at < self.cooldown)
+    }
+}
+
 /// Declaration order is rule order.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub enum Reason {
@@ -165,26 +171,32 @@ pub fn load_facts(conn: &Connection, now: i64) -> rusqlite::Result<BTreeMap<Stri
 
     let mut pending_phones = BTreeSet::new();
     let mut phone_last_sent = BTreeMap::new();
-    let mut stmt = conn.prepare(
-        "SELECT quote_id, customer_phone, status, COALESCE(sent_at, updated_at), updated_at
-         FROM messages",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT quote_id, customer_phone, status, sent_at, updated_at FROM messages")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let quote_id: String = row.get(0)?;
         let phone: String = row.get(1)?;
         let status: String = row.get(2)?;
-        let sent_at: i64 = row.get(3)?;
+        let sent_at: Option<i64> = row.get(3)?;
         let updated_at: i64 = row.get(4)?;
         let quote = facts.get_mut(&quote_id);
         match status.as_str() {
             "sent" => {
+                let sent_at = sent_at.unwrap_or(updated_at);
                 if let Some(quote) = quote {
                     quote.sends.insert(sent_at);
                 }
                 // Keyed by the row's phone: a re-export may have moved the quote off it.
                 let newest = phone_last_sent.entry(phone).or_insert(sent_at);
                 *newest = sent_at.max(*newest);
+            }
+            // A stamped row was attempted and may have arrived: the phone waits, the ladder doesn't.
+            "cancelled" => {
+                if let Some(sent_at) = sent_at {
+                    let newest = phone_last_sent.entry(phone).or_insert(sent_at);
+                    *newest = sent_at.max(*newest);
+                }
             }
             "draft" | "approved" | "sending" | "failed" => {
                 pending_phones.insert(phone);
@@ -247,7 +259,6 @@ fn matching_rules(policy: &Policy, facts: &Facts, now: i64) -> Vec<Reason> {
 
 pub fn decide(policy: &Policy, facts: &Facts, now: i64) -> Outcome {
     let suppressed = |label: &str| Outcome::Suppressed(label.to_string());
-    let in_cooldown = |at: Option<i64>| at.is_some_and(|at| now - at < policy.cooldown);
 
     if !facts.open {
         return suppressed("not open");
@@ -255,15 +266,16 @@ pub fn decide(policy: &Policy, facts: &Facts, now: i64) -> Outcome {
     if facts.phone_pending {
         return suppressed("pending message");
     }
-    if in_cooldown(facts.phone_last_sent) {
+    let reasons = matching_rules(policy, facts, now);
+    let replied = reasons.first() == Some(&Reason::UnansweredReply);
+    if !replied && policy.in_cooldown(facts.phone_last_sent, now) {
         return suppressed("cooldown");
     }
-    if in_cooldown(facts.rejected_at) {
+    if policy.in_cooldown(facts.rejected_at, now) {
         return suppressed("rejected");
     }
 
-    let reasons = matching_rules(policy, facts, now);
-    if reasons.first() != Some(&Reason::UnansweredReply) {
+    if !replied {
         let sends = facts.sends.len();
         let waited = now - facts.since_sent();
         if now - facts.created_at < policy.min_age {
@@ -566,15 +578,20 @@ mod tests {
         quote.created_at = NOW - 10 * HOUR;
         assert_eq!(first_reason(&quote), "unanswered_reply");
 
+        // A reply skips the cooldown; the same quote without one does not.
         let mut quote = replied(sends(1, NOW - DAY));
         quote.phone_last_sent = quote.last_sent();
+        assert_eq!(first_reason(&quote), "unanswered_reply");
+
+        quote.replies.clear();
         assert_eq!(label(&quote), "cooldown");
 
         let mut quote = replied(sends(1, NOW - 5 * DAY));
+        quote.phone_last_sent = Some(NOW - DAY);
         quote.phone_pending = true;
         assert_eq!(label(&quote), "pending message");
 
-        let mut quote = replied(sends(1, NOW - 5 * DAY));
+        quote.phone_pending = false;
         quote.rejected_at = Some(NOW - DAY);
         assert_eq!(label(&quote), "rejected");
     }
