@@ -245,11 +245,28 @@ mod tests {
         conn
     }
 
-    fn temp_dir(name: &str) -> PathBuf {
+    /// Deleted on drop, so a test that panics cleans up too.
+    struct TempDir(PathBuf);
+
+    impl std::ops::Deref for TempDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_dir(name: &str) -> TempDir {
         let dir = std::env::temp_dir().join(format!("robby-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        dir
+        TempDir(dir)
     }
 
     fn dump(conn: &Connection, sql: &str) -> Vec<String> {
@@ -590,8 +607,6 @@ mod tests {
         assert_eq!(reingest("null"), stored);
         assert_eq!(reingest(r#""2026-08-04T00:00:00Z""#), stored);
         assert_eq!(reingest(r#""2026-08-06T00:00:00Z""#), newer);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
