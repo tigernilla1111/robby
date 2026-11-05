@@ -81,9 +81,9 @@ Knobs live in one `Policy` struct with defaults. Tests build their own. No CLI o
 
 ## Phase 5: Run and display (MVP)
 
-- `outbox`: table of messages with status, reason, timestamps.
-- `run --now`: ingest, candidates, draft in one command.
-- README demo script exercises every guardrail: `run`, `approve --all`, `send`, `send` again (no-op), `run` again (cooldown suppressions, no new drafts), `send --fail` then `send`.
+- `outbox`: every message with status, reason, timestamps, provider id and error; a `sending` row is flagged STUCK.
+- `run [path]`: ingest, then draft, in one command; the draft list is the candidate list.
+- README demo script exercises the main guardrails: `run`, `approve --all`, `send`, `send` again (no-op), `run` again (cooldown suppressions, no new drafts), `approve` a must-edit draft with `--body`, `send --fail` then `send`, `outbox`. Send-time cancellations are covered by unit tests. One integration test runs the same script against the binary.
 
 ## README checkpoints
 

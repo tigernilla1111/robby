@@ -4,7 +4,60 @@ Automated follow-up for open home-service quotes. For a given "now" it decides w
 
 ## How to run
 
-_TODO_
+You need Rust 1.89 or newer, which the locked `rusqlite` requires, and a C compiler, because SQLite is compiled in. On macOS that means the Xcode Command Line Tools. The first build needs network access. Run everything from the repository root, since `run` reads `seed` from the current directory.
+
+```sh
+cargo build
+cargo test
+```
+
+**Commands**
+
+- `run [path]`: ingest a path, `seed` by default, then draft
+- `ingest <path>`: load a seed directory, a `.json` quotes file or a `.jsonl` events file
+- `candidates`: list who to follow up with, and every suppressed quote with its reason
+- `draft`: create one draft per candidate
+- `approve <id> [--body TEXT]`: approve one message, replacing its text with `--body`
+- `approve --all`: approve every draft that needs no edit
+- `reject <id>`: reject a draft or approved message
+- `send [--fail QUOTE]`: recheck and send every approved or failed message; `--fail` loses the provider's ack for that quote
+- `outbox`: list every message with its status, reason, timestamps, provider id and error; a stuck message is flagged STUCK
+
+**Global flags**
+
+- `--db`: the SQLite file, default `robby.db` in the current directory
+- `--now`: the current time, default the wall clock. A wall-clock run on the seed warns that the newest event is stale.
+
+**Demo.** The numbers below apply at the demo `--now`; a wall-clock run differs. `tests/demo.rs` runs the same sequence, so `cargo test` checks them.
+
+```sh
+cargo build
+r() { ./target/debug/robby --db /tmp/robby-demo.db --now 2026-08-17T13:00:00Z "$@"; }
+rm -f /tmp/robby-demo.db
+r run
+r approve --all
+r send
+r send
+r run
+r approve 1
+r approve 1 --body "Hi Ray, thanks for your message about the quote. We can do Tuesday."
+r send --fail Q-1016
+r send
+r outbox
+```
+
+1. `run`: ingests the seed (30 quotes, 82 events, 6 duplicates), then drafts: 25 drafts, 5 skipped.
+2. `approve --all`: 22 approved; 3 need edit, because those customers replied.
+3. `send`: 22 sent.
+4. `send`: nothing to send, sent 0.
+5. `run`: re-ingest stores no new events; 0 drafted, 30 skipped, each with its reason: 23 cooldown, 3 pending message, 3 not open, 1 ladder wait.
+6. `approve 1`: refused, exit 1. A reply needs a human-written `--body`.
+7. `approve 1 --body`: approved.
+8. `send --fail Q-1016`: the provider stores the text but the ack is lost, so #1 is failed, exit 1.
+9. `send`: retries with the same idempotency key; #1 is sent and there is still one provider row for it.
+10. `outbox`: 23 sent, 2 drafts, every column.
+
+The demo shows suppressions, the must-edit refusal, the no-op send and the lost-ack retry; send-time cancellations are covered by unit tests.
 
 ## Follow-up policy and why
 
@@ -40,7 +93,7 @@ The cooldown, closed-quote and reply guardrails are checked when the policy pick
 
 - **One text per customer per 48 hours.** "Last sent" to a phone is the newest of the seed's `last_contact_at`, outbound `message_sent` events and our own sent messages, across every quote on that number. A phone inside the window is never a candidate, and `send` cancels an approved message if a send to that phone has appeared since, or if the quote's number has changed since it was drafted. The one exception is answering a customer's reply: the cooldown limits outreach the shop starts, and a person writing back is not outreach. The reply goes through the must-edit path, and once our send answers it the rule stops matching, so it cannot loop.
 - **Never about a closed quote.** A quote that is accepted or dismissed in `quotes.json`, or has a `quote_accepted` event, is never a candidate. `ingest` cancels its pending messages, and `send` checks the status again before each message.
-- **Never a double send.** Drafting again creates nothing while a message is pending; the database allows one pending message per phone. `send` moves each message from `approved` to `sending` with a compare-and-swap, so two runs cannot both send it, then calls the provider with the idempotency key stored on the message. A failed send is retried with the same key: the fake provider returns the original id, so a send whose acknowledgement was lost still ends as one delivered text. A message stuck in `sending` is never retried by the engine. Closing its quote cancels it; otherwise clearing one takes a database edit.
+- **Never a double send.** Drafting again creates nothing while a message is pending; the database allows one pending message per phone. `send` moves each message from `approved` to `sending` with a compare-and-swap, so two runs cannot both send it, then calls the provider with the idempotency key stored on the message. A failed send is retried with the same key: the fake provider returns the original id, so a send whose acknowledgement was lost still ends as one delivered text. A message stuck in `sending` is never retried by the engine, and `outbox` flags it STUCK. Closing its quote cancels it; otherwise clearing one takes a database edit.
 - **A reply is never answered by a template.** A customer whose last reply is after our last send gets an `unanswered_reply` draft: a placeholder that `approve` refuses without `--body` and that `approve --all` skips. If a reply on any open quote on that phone is later than our last send on that quote, `send` cancels the message rather than send a nudge over theirs.
 
 **Possibly delivered texts.** `send` stamps a message before calling the provider. If that message is later cancelled, the stamp still counts for the phone's cooldown, because the text may have arrived. A customer's reply can still be answered. It does not count as a follow-up on the ladder. A text that never arrived costs a 48-hour wait, and that is the safer mistake.
@@ -69,7 +122,7 @@ SQLite, with all timestamps stored as integer UTC seconds.
 ## Decisions and assumptions
 
 - **Status source of truth:** `quotes.json` is authoritative. A `quote_accepted` event promotes an open quote to accepted, never the reverse. Status is checked again at send time.
-- **Duplicates and ordering:** events dedupe on `event_id`, and nothing depends on file order. Ingesting the same data twice, or in a different order, gives the same stored rows.
+- **Duplicates and ordering:** exact repeats are ignored, so ingesting the same data twice, or in a different order, gives the same stored rows. If two lines share an `event_id` but differ, the first one read wins.
 - **Bad input:** unparseable lines and missing fields are skipped and counted, never fatal. Events for unknown quotes are stored.
 - **Bad re-export:** if a later file has an invalid row for a stored quote, such as `"status": "Accepted"`, the row is skipped and the stored status stands. A closed quote could therefore stay open until a valid file arrives. The skip count and a stderr line show it.
 - **Promotion count:** `promoted` repeats on each re-ingest for a quote the file lists as open but that has an accepted event. The stored status stays correct.
@@ -111,4 +164,6 @@ The harder problem is people. Fifty owners won't all check their drafts every da
 
 ## Where I stopped
 
-_TODO_
+Everything in the MVP plan is built: ingest, the policy and `candidates`, `draft`, `approve`, `reject` and `send` with a fake provider and rechecks, and `run` and `outbox`. The guardrails have unit tests, and `tests/demo.rs` runs the sequence above against the binary. Nothing from "What I'd build next" is started, and no real provider is wired in; there is no web page, only the command line.
+
+_Time spent: TODO, to be filled in by hand._
