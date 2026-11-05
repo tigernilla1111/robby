@@ -166,4 +166,4 @@ The harder problem is people. Fifty owners won't all check their drafts every da
 
 Everything in the MVP plan is built: ingest, the policy and `candidates`, `draft`, `approve`, `reject` and `send` with a fake provider and rechecks, and `run` and `outbox`. The guardrails have unit tests, and `tests/demo.rs` runs the sequence above against the binary. Nothing from "What I'd build next" is started, and no real provider is wired in; there is no web page, only the command line.
 
-_Time spent: TODO, to be filled in by hand._
+_Time spent: about 1 hour 10 minutes of active work, writing prompts and reading plans and code, with the last 10 minutes on preparing the deliverables. The longer gaps in the timestamps are queued prompts and letting the agent work._
