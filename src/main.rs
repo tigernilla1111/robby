@@ -21,7 +21,7 @@ struct Cli {
     #[arg(long, global = true, default_value = "robby.db")]
     db: PathBuf,
 
-    /// Current time, YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MMZ (default: wall clock)
+    /// Current time, RFC 3339 or YYYY-MM-DDTHH:MMZ (default: wall clock)
     #[arg(long, global = true, value_parser = parse_now)]
     now: Option<i64>,
 
@@ -66,8 +66,7 @@ enum Command {
 }
 
 fn parse_now(s: &str) -> Result<i64, String> {
-    time::parse_ts(s)
-        .ok_or_else(|| "expected YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MMZ".to_string())
+    time::parse_ts(s).ok_or_else(|| "expected RFC 3339 or YYYY-MM-DDTHH:MMZ".to_string())
 }
 
 fn quote_line(quote: &Facts, outcome: &Outcome, now: i64) -> String {

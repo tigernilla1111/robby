@@ -145,7 +145,8 @@ pub fn load_facts(conn: &Connection, now: i64) -> rusqlite::Result<BTreeMap<Stri
 
     // Comparing in SQL means a non-text direction cannot fail the row read.
     let mut stmt = conn.prepare(
-        "SELECT quote_id, type, ts, COALESCE(json_extract(raw, '$.direction') = 'inbound', 0)
+        "SELECT quote_id, type, ts,
+                COALESCE(lower(json_extract(raw, '$.direction')) = 'inbound', 0)
          FROM events WHERE ts <= ?1",
     )?;
     let mut rows = stmt.query(params![now])?;
@@ -738,6 +739,8 @@ mod tests {
         assert_eq!(outcomes(&conn), never_contacted);
 
         add_event(&conn, "message_sent", "Q-1", NOW - DAY, r#"{"direction":"inbound"}"#);
+        add_event(&conn, "message_sent", "Q-1", NOW - DAY, r#"{"direction":"Inbound"}"#);
+        add_event(&conn, "message_sent", "Q-1", NOW - DAY, r#"{"direction":"INBOUND"}"#);
         assert_eq!(outcomes(&conn), never_contacted);
 
         add_event(&conn, "message_sent", "Q-1", NOW - DAY, "{}");

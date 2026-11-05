@@ -197,7 +197,7 @@ pub fn send(
     now: i64,
 ) -> rusqlite::Result<Vec<(Message, Delivery)>> {
     let mut results = Vec::new();
-    for msg in select(conn, "status IN ('approved','failed')")? {
+    for mut msg in select(conn, "status IN ('approved','failed')")? {
         // Per row, so a reply or a closure ingested during the run reaches the next row.
         let facts = load_facts(conn, now)?;
         if let Some(reason) = blocked(policy, &facts, &msg, now) {
@@ -212,16 +212,22 @@ pub fn send(
             continue;
         }
 
-        // The stamp records the attempt before the provider can deliver it.
-        let claimed = conn.execute(
-            "UPDATE messages SET status = 'sending', sent_at = ?2, updated_at = ?2
-             WHERE id = ?1 AND status IN ('approved','failed')",
-            params![msg.id, now],
-        )?;
-        if claimed == 0 {
+        // The stamp records the attempt before the provider can deliver it. The body comes back
+        // with the claim, so an edit approved since the run began is the text that goes out.
+        let claimed = conn
+            .query_row(
+                "UPDATE messages SET status = 'sending', sent_at = ?2, updated_at = ?2
+                 WHERE id = ?1 AND status IN ('approved','failed')
+                 RETURNING body",
+                params![msg.id, now],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(body) = claimed else {
             // Another run or ingest got there first, and reports its own result.
             continue;
-        }
+        };
+        msg.body = body;
 
         // No row marked means ingest cancelled it mid-send, so the report matches the row.
         let delivery = match sender.send(&msg) {
@@ -695,6 +701,34 @@ mod tests {
         let results = send(&conn, &Policy::default(), &probe, NOW).unwrap();
         assert!(matches!(results[..], [(_, Delivery::Cancelled("cancelled during send"))]));
         assert_eq!(row(&conn, 1).status, "cancelled");
+    }
+
+    /// Edits the next row mid-call, as a human running `approve --body` would.
+    struct EditsNext<'a>(FakeSender<'a>);
+
+    impl Sender for EditsNext<'_> {
+        fn send(&self, msg: &Message) -> Result<String, String> {
+            if msg.id == 1 {
+                approve(self.0.conn, 2, Some("edited"), NOW).unwrap();
+            }
+            self.0.send(msg)
+        }
+    }
+
+    #[test]
+    fn edit_during_a_run_is_what_goes_out() {
+        let mut conn = memory_db();
+        add_quote(&conn, "Q-1", "+15550001");
+        add_quote(&conn, "Q-2", "+15550002");
+        assert_eq!(run_draft(&mut conn, NOW), 2);
+        approve_all(&conn, NOW).unwrap();
+
+        send(&conn, &Policy::default(), &EditsNext(fake(&conn, None)), NOW).unwrap();
+
+        let sql = "SELECT body FROM provider_outbox WHERE to_phone = '+15550002'";
+        let delivered: String = conn.query_row(sql, [], |row| row.get(0)).unwrap();
+        assert_eq!(delivered, "edited");
+        assert_eq!(row(&conn, 2).status, "sent");
     }
 
     fn count(labels: &[String], label: &str) -> usize {

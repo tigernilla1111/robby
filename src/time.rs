@@ -1,11 +1,12 @@
 use chrono::{DateTime, NaiveDateTime};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// RFC 3339, so fractions and offsets from webhooks parse, or the short form without seconds.
 pub fn parse_ts(s: &str) -> Option<i64> {
-    ["%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%MZ"]
-        .iter()
-        .find_map(|format| NaiveDateTime::parse_from_str(s, format).ok())
-        .map(|parsed| parsed.and_utc().timestamp())
+    DateTime::parse_from_rfc3339(s).map(|parsed| parsed.timestamp()).ok().or_else(|| {
+        let parsed = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%MZ").ok()?;
+        Some(parsed.and_utc().timestamp())
+    })
 }
 
 pub fn format_ts(ts: i64) -> String {
@@ -42,9 +43,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_fractions_and_offsets() {
+        for same in [
+            "2026-08-17 13:00:00Z",
+            "2026-08-17T13:00:00.000Z",
+            "2026-08-17T13:00:00.123456Z",
+            "2026-08-17T13:00:00+00:00",
+            "2026-08-17T09:00:00-04:00",
+        ] {
+            assert_eq!(parse_ts(same), Some(1786971600), "{same}");
+        }
+    }
+
+    #[test]
     fn rejects_bad_values() {
         for bad in [
-            "2026-08-17 13:00:00Z",
             "2026-08-17T13:00:00",
             "2026-13-01T00:00:00Z",
             "2026-02-31T00:00:00Z",
