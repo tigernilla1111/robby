@@ -21,7 +21,7 @@ impl Default for Policy {
         Policy {
             cooldown: 48 * HOUR,
             min_age: 48 * HOUR,
-            xl_amount: 14_000.0,
+            xl_amount: 11_000.0,
             view_window: 72 * HOUR,
             max_sends: 6,
             ladder: [48 * HOUR, 72 * HOUR, 72 * HOUR, 7 * DAY, 14 * DAY],
@@ -346,7 +346,7 @@ mod tests {
     const PHONE: &str = "+15550000";
 
     const GOLDEN: [&str; 30] = [
-        "Q-1016: unanswered_reply, stale",
+        "Q-1016: unanswered_reply, xl_quote_stale, stale",
         "Q-1007: unanswered_reply, stale",
         "Q-1015: unanswered_reply, never_contacted, stale",
         "Q-1021: xl_quote_stale, never_viewed, stale",
@@ -355,16 +355,16 @@ mod tests {
         "Q-1027: xl_quote_stale, stale",
         "Q-1023: xl_quote_stale, viewed_no_response",
         "Q-1020: xl_quote_stale, never_viewed",
-        "Q-1022: repeat_views, stale",
+        "Q-1010: xl_quote_stale, never_contacted, stale",
+        "Q-1022: xl_quote_stale, repeat_views, stale",
+        "Q-1002: xl_quote_stale, never_viewed",
         "Q-1008: repeat_views, stale",
         "Q-1001: repeat_views, never_contacted, stale",
         "Q-1000: repeat_views, viewed_no_response, never_contacted, stale",
         "Q-1028: repeat_views, never_contacted, stale",
-        "Q-1010: never_contacted, stale",
         "Q-1024: never_contacted, stale",
         "Q-1025: never_contacted, stale",
         "Q-1018: never_contacted, stale",
-        "Q-1002: never_viewed",
         "Q-1014: never_viewed, stale",
         "Q-1005: never_viewed, stale",
         "Q-1013: never_viewed, stale",
@@ -600,7 +600,7 @@ mod tests {
     fn boundaries() {
         // The view before the send keeps rule 6 out of the XL cases.
         let mut quote = facts("Q-1");
-        quote.amount = 14_000.0;
+        quote.amount = 11_000.0;
         quote.sends = sends(1, NOW - 3 * DAY);
         quote.views = BTreeSet::from([NOW - 4 * DAY]);
         assert_eq!(label(&quote), "xl_quote_stale");
@@ -608,7 +608,7 @@ mod tests {
         quote.sends = sends(1, NOW - 3 * DAY + 1);
         assert_eq!(label(&quote), "no rule");
 
-        quote.amount = 13_999.0;
+        quote.amount = 10_999.0;
         quote.sends = sends(1, NOW - 3 * DAY);
         assert_eq!(label(&quote), "no rule");
 

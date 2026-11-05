@@ -108,16 +108,16 @@ mod tests {
         ("Q-1027", "xl_quote_stale"),
         ("Q-1023", "xl_quote_stale"),
         ("Q-1020", "xl_quote_stale"),
-        ("Q-1022", "repeat_views"),
+        ("Q-1010", "xl_quote_stale"),
+        ("Q-1022", "xl_quote_stale"),
+        ("Q-1002", "xl_quote_stale"),
         ("Q-1008", "repeat_views"),
         ("Q-1001", "repeat_views"),
         ("Q-1000", "repeat_views"),
         ("Q-1028", "repeat_views"),
-        ("Q-1010", "never_contacted"),
         ("Q-1024", "never_contacted"),
         ("Q-1025", "never_contacted"),
         ("Q-1018", "never_contacted"),
-        ("Q-1002", "never_viewed"),
         ("Q-1014", "never_viewed"),
         ("Q-1005", "never_viewed"),
         ("Q-1013", "never_viewed"),
@@ -247,8 +247,8 @@ mod tests {
             "Hi Judy, checking in on the quote Ridge put together on Aug 5. Happy to walk through it or answer any questions. - Sunrise Home Services"
         );
         assert_eq!(
-            stored[18].body,
-            "Hi Dave, following up on the quote from Brad on Aug 8. Want us to resend it, or have any questions? - Sunrise Home Services"
+            stored[19].body,
+            "Hi Pete, following up on the quote from Jaden on Aug 7. Want us to resend it, or have any questions? - Sunrise Home Services"
         );
 
         let (drafts, skipped) = run(&mut conn, NOW);
