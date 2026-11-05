@@ -90,12 +90,18 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn Error>> {
     match cli.command {
         Command::Ingest { path } => {
             let counts = ingest::ingest(&mut conn, &path, now)?;
-            println!("quotes: {} stored, {} skipped", counts.quotes_stored, counts.quotes_skipped);
+            println!(
+                "quotes: {} stored, {} skipped",
+                counts.quotes_stored, counts.quotes_skipped
+            );
             println!(
                 "events: {} stored, {} duplicates ignored, {} skipped",
                 counts.events_stored, counts.events_duplicate, counts.events_skipped
             );
-            println!("promoted: {}, cancelled: {}", counts.promoted, counts.cancelled);
+            println!(
+                "promoted: {}, cancelled: {}",
+                counts.promoted, counts.cancelled
+            );
         }
         Command::Candidates => {
             let (ranked, suppressed) = policy::candidates(&conn, &Policy::default(), now)?;
