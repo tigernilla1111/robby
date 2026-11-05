@@ -11,7 +11,7 @@ High level. Build strictly top to bottom; the hour ends wherever it ends and the
 - quotes.json status is authoritative. A `quote_accepted` event promotes open to accepted, never the reverse. Status is rechecked at send time.
 - "Last sent" per quote is derived: max of `last_contact_at`, outbound `message_sent` events, and our own sent rows. "Sends" is the count of distinct outbound timestamps across those sources. When nothing was ever sent, "nothing sent for N days" counts from `created_at`.
 - Policy is an ordered rule list. Rules are matched first, then suppressions apply. The candidate list prints every matching rule; the draft uses the first. No scoring.
-- Hard suppressions always apply: not open, pending message for the phone, phone within cooldown. Soft suppressions skip rule 1 because the customer reached out: minimum age, ladder wait, follow-up cap, give-up.
+- Hard suppressions always apply: not open, pending message for the phone. Phone within cooldown applies to everything except rule 1, because a shop may answer a customer whenever it wants. Soft suppressions skip rule 1 because the customer reached out: minimum age, ladder wait, follow-up cap, give-up.
 - Pending means draft, approved, sending, or failed. One pending message per customer phone, enforced by a partial unique index. When email lands, the index and the cooldown check extend to the email address too. The ladder stays per quote.
 - Give up is display only: an exhausted quote stays in the suppressed list; GIVE_UP_DAYS after send 6 it is hidden. Nothing is written.
 - `reject` suppresses the quote for one cooldown window so the next run does not re-draft it.
@@ -47,7 +47,7 @@ Knobs live in one `Policy` struct with defaults. Tests build their own. No CLI o
 ## Phase 2: Follow-up policy (MVP)
 
 - `candidates --now`: derive per-quote facts, match rules, apply suppressions, sort, collapse to one candidate per phone, print the ranked list and the suppressed list with reasons.
-- Suppressions, each named: not open; pending message for the phone; phone contacted within cooldown on any quote; rejected within cooldown; younger than minimum age; ladder wait not elapsed; exhausted (sends at max, within GIVE_UP_DAYS); given up (hidden). The last four do not apply to rule 1.
+- Suppressions, each named: not open; pending message for the phone; phone contacted within cooldown on any quote; rejected within cooldown; younger than minimum age; ladder wait not elapsed; exhausted (sends at max, within GIVE_UP_DAYS); given up (hidden). The phone cooldown and the last four do not apply to rule 1.
 - Rules, in order. "We sent" is any outbound contact, and `quote_sent` events do not count; "they" is the customer. Views and replies count distinct timestamps.
 
 | # | Reason | Rule |
@@ -74,7 +74,7 @@ Knobs live in one `Policy` struct with defaults. Tests build their own. No CLI o
 ## Phase 4: Approve and send (MVP)
 
 - `approve <id> [--body]` or `approve --all`, which skips must-edit drafts and lists them. A must-edit draft is refused without `--body`. `reject <id>`.
-- `send --now`: for each approved or failed row, recheck quote status, phone cooldown, and whether the customer replied after the draft was made (cancels unless must-edit). A failed recheck cancels the row with the reason. Then compare-and-swap to sending, call the `Sender`, mark sent with provider id or failed with error. Retries reuse the stored key. Rows stuck in sending are never auto-retried; `outbox` flags them. If the quote closes first, ingest cancels the row like any pending message, so a possibly delivered text stops counting as sent. That trade-off is accepted.
+- `send --now`: for each approved or failed row, recheck quote status, phone cooldown (skipped for a must-edit row while its reply is unanswered), and whether a customer on that phone replied after our last send (cancels unless must-edit). A failed recheck cancels the row with the reason. Then compare-and-swap to sending, call the `Sender`, mark sent with provider id or failed with error. Retries reuse the stored key. Rows stuck in sending are never auto-retried; `outbox` flags them. If the quote closes first, ingest cancels the row like any pending message. An attempted text still counts for the phone's cooldown, because it may have been delivered.
 - `Sender` trait. `FakeSender` writes `provider_outbox`; a repeated key returns the stored provider id. `--fail <quote>` makes it store the message and then error, which is the lost-ack case.
 - Tests: draft twice, one row; second quote on the same phone not drafted while the first is pending; approve must-edit without body refused; send twice, one provider row; stored-then-error retry, same key, one provider row; accepted between approve and send, cancelled; reply after draft, cancelled.
 - README production note: Twilio behind the same trait; if the provider ignores client keys, ambiguous failures are reconciled against the provider, not resent; opt-out footer and quiet hours live in the sender.
