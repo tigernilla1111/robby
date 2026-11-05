@@ -1,3 +1,4 @@
+use crate::policy::DAY;
 use crate::time::parse_ts;
 use rusqlite::{Connection, params};
 use serde::Deserialize;
@@ -26,11 +27,11 @@ WHERE status = 'open'
   AND id IN (SELECT quote_id FROM events WHERE type = 'quote_accepted')";
 
 const CANCEL: &str = "
-UPDATE messages SET status = 'cancelled', error = 'quote not open', updated_at = ?1
+UPDATE messages SET status = 'cancelled', error = 'quote not open'
 WHERE status IN ('draft','approved','sending','failed')
   AND quote_id IN (SELECT id FROM quotes WHERE status <> 'open')";
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Counts {
     pub quotes_stored: usize,
     pub quotes_skipped: usize,
@@ -67,7 +68,7 @@ type Quote = (RawQuote, i64, Option<i64>);
 /// An event with its parsed timestamp and raw line.
 type Event = (RawEvent, i64, String);
 
-pub fn ingest(conn: &mut Connection, path: &Path, now: i64) -> Result<Counts, Box<dyn Error>> {
+pub fn ingest(conn: &mut Connection, path: &Path) -> Result<Counts, Box<dyn Error>> {
     let (quotes_path, events_path) = classify(path)?;
 
     let mut counts = Counts::default();
@@ -95,33 +96,24 @@ pub fn ingest(conn: &mut Connection, path: &Path, now: i64) -> Result<Counts, Bo
                 last_contact_at
             ],
         )?;
-        counts.quotes_stored += 1;
     }
+    counts.quotes_stored = quotes.len();
     for (event, ts, raw) in &events {
-        let inserted = tx.execute(
+        counts.events_stored += tx.execute(
             INSERT_EVENT,
             params![event.event_id, event.event_type, event.quote_id, ts, raw],
         )?;
-        if inserted == 1 {
-            counts.events_stored += 1;
-        } else {
-            counts.events_duplicate += 1;
-        }
     }
+    counts.events_duplicate = events.len() - counts.events_stored;
     counts.promoted = tx.execute(PROMOTE, [])?;
-    counts.cancelled = tx.execute(CANCEL, [now])?;
+    counts.cancelled = tx.execute(CANCEL, [])?;
     tx.commit()?;
     Ok(counts)
 }
 
 pub fn stale_days(conn: &Connection, now: i64) -> rusqlite::Result<Option<i64>> {
     let newest: Option<i64> = conn.query_row("SELECT MAX(ts) FROM events", [], |row| row.get(0))?;
-    if let Some(newest) = newest
-        && now - newest > 30 * 86400
-    {
-        return Ok(Some((now - newest) / 86400));
-    }
-    Ok(None)
+    Ok(newest.map(|newest| now - newest).filter(|age| *age > 30 * DAY).map(|age| age / DAY))
 }
 
 fn classify(path: &Path) -> Result<(Option<PathBuf>, Option<PathBuf>), String> {
@@ -164,14 +156,8 @@ fn read_quotes(path: &Path) -> Result<(Vec<Quote>, usize), Box<dyn Error>> {
 
 fn parse_quote(element: Value) -> Result<Quote, String> {
     let mut quote: RawQuote = from_object(element)?;
-    quote.id = quote.id.trim().to_string();
-    quote.customer_phone = quote.customer_phone.trim().to_string();
-    if quote.id.is_empty() {
-        return Err("empty id".to_string());
-    }
-    if quote.customer_phone.is_empty() {
-        return Err("empty customer_phone".to_string());
-    }
+    quote.id = trimmed("id", &quote.id)?;
+    quote.customer_phone = trimmed("customer_phone", &quote.customer_phone)?;
     if !["open", "accepted", "dismissed"].contains(&quote.status.as_str()) {
         return Err(format!("bad status: {}", quote.status));
     }
@@ -210,18 +196,18 @@ fn parse_event(line: &[u8]) -> Result<Option<Event>, String> {
     }
     let value: Value = serde_json::from_str(line).map_err(|e| format!("invalid JSON: {e}"))?;
     let mut event: RawEvent = from_object(value)?;
-    for (name, field) in [
-        ("event_id", &mut event.event_id),
-        ("type", &mut event.event_type),
-        ("quote_id", &mut event.quote_id),
-    ] {
-        *field = field.trim().to_string();
-        if field.is_empty() {
-            return Err(format!("empty {name}"));
-        }
-    }
+    event.event_id = trimmed("event_id", &event.event_id)?;
+    event.event_type = trimmed("type", &event.event_type)?;
+    event.quote_id = trimmed("quote_id", &event.quote_id)?;
     let ts = parse_ts(&event.timestamp).ok_or("bad timestamp")?;
     Ok(Some((event, ts, line.to_string())))
+}
+
+fn trimmed(name: &str, field: &str) -> Result<String, String> {
+    match field.trim() {
+        "" => Err(format!("empty {name}")),
+        field => Ok(field.to_string()),
+    }
 }
 
 fn from_object<T: DeserializeOwned>(value: Value) -> Result<T, String> {
@@ -235,46 +221,14 @@ fn from_object<T: DeserializeOwned>(value: Value) -> Result<T, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
-
-    const NOW: i64 = 1786971600;
-
-    fn memory_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        db::migrate(&conn).unwrap();
-        conn
-    }
-
-    /// Deleted on drop, so a test that panics cleans up too.
-    struct TempDir(PathBuf);
-
-    impl std::ops::Deref for TempDir {
-        type Target = Path;
-
-        fn deref(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn temp_dir(name: &str) -> TempDir {
-        let dir = std::env::temp_dir().join(format!("robby-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        TempDir(dir)
-    }
+    use crate::testutil::*;
 
     fn dump(conn: &Connection, sql: &str) -> Vec<String> {
         let mut stmt = conn.prepare(sql).unwrap();
         let columns = stmt.column_count();
         stmt.query_map([], |row| {
             let values: Vec<String> = (0..columns)
-                .map(|i| format!("{:?}", row.get_ref(i).unwrap()))
+                .map(|i| format!("{:?}", row.get::<_, rusqlite::types::Value>(i).unwrap()))
                 .collect();
             Ok(values.join("|"))
         })
@@ -325,9 +279,9 @@ mod tests {
 
     #[test]
     fn seed_ingest_is_idempotent_in_any_order() {
-        let seed = Path::new(env!("CARGO_MANIFEST_DIR")).join("seed");
+        let seed = seed();
         let mut conn = memory_db();
-        let counts = ingest(&mut conn, &seed, NOW).unwrap();
+        let counts = ingest(&mut conn, &seed).unwrap();
         assert_counts(&counts, (30, 0), (82, 6, 0), (0, 0));
         let quotes = dump_quotes(&conn);
         let events = dump_events(&conn);
@@ -346,14 +300,14 @@ mod tests {
         fs::copy(seed.join("quotes.json"), shuffled.join("quotes.json")).unwrap();
         fs::write(shuffled.join("events.jsonl"), front.join("\n")).unwrap();
 
-        let counts = ingest(&mut conn, &shuffled, NOW).unwrap();
+        let counts = ingest(&mut conn, &shuffled).unwrap();
         assert_counts(&counts, (30, 0), (0, 88, 0), (0, 0));
         assert_eq!(dump_quotes(&conn), quotes);
         assert_eq!(dump_events(&conn), events);
 
         // Only a fresh database can detect order dependence.
         let mut fresh = memory_db();
-        let counts = ingest(&mut fresh, &shuffled, NOW).unwrap();
+        let counts = ingest(&mut fresh, &shuffled).unwrap();
         assert_counts(&counts, (30, 0), (82, 6, 0), (0, 0));
         assert_eq!(dump_quotes(&fresh), quotes);
         assert_eq!(dump_events(&fresh), events);
@@ -368,22 +322,22 @@ mod tests {
         fs::write(&events, event_line("e1", "quote_accepted", "Q-1")).unwrap();
 
         let mut conn = memory_db();
-        let counts = ingest(&mut conn, &dir, NOW).unwrap();
+        let counts = ingest(&mut conn, &dir).unwrap();
         assert_counts(&counts, (1, 0), (1, 0, 0), (1, 0));
         assert_eq!(status(&conn, "quotes", "Q-1"), "accepted");
 
-        let counts = ingest(&mut conn, &dir, NOW).unwrap();
+        let counts = ingest(&mut conn, &dir).unwrap();
         assert_counts(&counts, (1, 0), (0, 1, 0), (1, 0));
         assert_eq!(status(&conn, "quotes", "Q-1"), "accepted");
 
         let mut events_first = memory_db();
-        ingest(&mut events_first, &events, NOW).unwrap();
-        ingest(&mut events_first, &quotes, NOW).unwrap();
+        ingest(&mut events_first, &events).unwrap();
+        ingest(&mut events_first, &quotes).unwrap();
         assert_eq!(status(&events_first, "quotes", "Q-1"), "accepted");
 
         fs::write(&quotes, format!("[{}]", quote_json("Q-1", "dismissed"))).unwrap();
         let mut dismissed = memory_db();
-        let counts = ingest(&mut dismissed, &dir, NOW).unwrap();
+        let counts = ingest(&mut dismissed, &dir).unwrap();
         assert_eq!(counts.promoted, 0);
         assert_eq!(status(&dismissed, "quotes", "Q-1"), "dismissed");
     }
@@ -424,7 +378,7 @@ mod tests {
         fs::write(dir.join("quotes.json"), quotes).unwrap();
 
         let mut conn = memory_db();
-        let counts = ingest(&mut conn, &dir, NOW).unwrap();
+        let counts = ingest(&mut conn, &dir).unwrap();
         assert_counts(&counts, (1, 3), (2, 0, 5), (0, 0));
         assert_eq!(status(&conn, "quotes", "Q-1"), "open");
         let raw: String = conn
@@ -450,7 +404,7 @@ mod tests {
             r#"["e1","quote_viewed","Q-1","2026-08-02T00:00:00Z"]"#,
         )
         .unwrap();
-        let counts = ingest(&mut memory_db(), &dir, NOW).unwrap();
+        let counts = ingest(&mut memory_db(), &dir).unwrap();
         assert_counts(&counts, (0, 1), (0, 0, 1), (0, 0));
     }
 
@@ -467,8 +421,8 @@ mod tests {
         ] {
             conn.execute(
                 "INSERT INTO messages (id, quote_id, customer_phone, reason, body, status,
-                                       policy_now, idempotency_key, created_at, updated_at)
-                 VALUES (?1, ?2, ?2, 'test', 'hi', ?3, 0, ?2, 0, 0)",
+                                       idempotency_key, created_at)
+                 VALUES (?1, ?2, ?2, 'test', 'hi', ?3, ?2, 0)",
                 params![id, quote_id, message_status],
             )
             .unwrap();
@@ -486,17 +440,15 @@ mod tests {
         ];
         fs::write(&quotes, format!("[{}]", elements.join(","))).unwrap();
 
-        let counts = ingest(&mut conn, &quotes, NOW).unwrap();
+        let counts = ingest(&mut conn, &quotes).unwrap();
         assert_counts(&counts, (6, 0), (0, 0, 0), (0, 4));
         for id in ["1", "2", "3", "4"] {
-            let row: (String, String, i64) = conn
-                .query_row(
-                    "SELECT status, error, updated_at FROM messages WHERE id = ?1",
-                    [id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
+            let row: (String, String) = conn
+                .query_row("SELECT status, error FROM messages WHERE id = ?1", [id], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
                 .unwrap();
-            assert_eq!(row, ("cancelled".to_string(), "quote not open".to_string(), NOW));
+            assert_eq!(row, ("cancelled".to_string(), "quote not open".to_string()));
         }
         assert_eq!(status(&conn, "messages", "5"), "sent");
         assert_eq!(status(&conn, "messages", "6"), "draft");
@@ -504,16 +456,16 @@ mod tests {
         let before = dump_quotes(&conn);
         let events = dir.join("events.jsonl");
         fs::write(&events, event_line("e1", "quote_viewed", "Q-6")).unwrap();
-        let counts = ingest(&mut conn, &events, NOW).unwrap();
+        let counts = ingest(&mut conn, &events).unwrap();
         assert_counts(&counts, (0, 0), (1, 0, 0), (0, 0));
         assert_eq!(dump_quotes(&conn), before);
 
-        assert!(ingest(&mut conn, &dir.join("missing"), NOW).is_err());
+        assert!(ingest(&mut conn, &dir.join("missing")).is_err());
         let text_file = dir.join("notes.txt");
         fs::write(&text_file, "[]").unwrap();
-        assert!(ingest(&mut conn, &text_file, NOW).is_err());
+        assert!(ingest(&mut conn, &text_file).is_err());
         fs::write(&quotes, "not json").unwrap();
-        assert!(ingest(&mut conn, &quotes, NOW).is_err());
+        assert!(ingest(&mut conn, &quotes).is_err());
         assert_eq!(dump_quotes(&conn), before);
     }
 
@@ -526,16 +478,16 @@ mod tests {
         fs::write(&events, event_line("e1", "quote_accepted", "Q-1")).unwrap();
 
         let mut conn = memory_db();
-        ingest(&mut conn, &quotes, NOW).unwrap();
+        ingest(&mut conn, &quotes).unwrap();
         conn.execute(
             "INSERT INTO messages (id, quote_id, customer_phone, reason, body, status,
-                                   policy_now, idempotency_key, created_at, updated_at)
-             VALUES (1, 'Q-1', '+1Q-1', 'test', 'hi', 'approved', 0, 'k', 0, 0)",
+                                   idempotency_key, created_at)
+             VALUES (1, 'Q-1', '+1Q-1', 'test', 'hi', 'approved', 'k', 0)",
             [],
         )
         .unwrap();
 
-        let counts = ingest(&mut conn, &events, NOW).unwrap();
+        let counts = ingest(&mut conn, &events).unwrap();
         assert_counts(&counts, (0, 0), (1, 0, 0), (1, 1));
         assert_eq!(status(&conn, "quotes", "Q-1"), "accepted");
         assert_eq!(status(&conn, "messages", "1"), "cancelled");
@@ -547,43 +499,20 @@ mod tests {
         let quotes = dir.join("quotes.json");
         fs::write(&quotes, format!("[{}]", quote_json("Q-1", "open"))).unwrap();
         let mut conn = memory_db();
-        ingest(&mut conn, &quotes, NOW).unwrap();
+        ingest(&mut conn, &quotes).unwrap();
 
         let changed = r#"[{"id":"Q-1","customer_name":"Bo","customer_phone":"+2","tech_name":"Cy",
                            "amount":7.5,"status":"dismissed","created_at":"2026-08-03T00:00:00Z",
                            "last_contact_at":"2026-08-04T00:00:00Z"}]"#;
         fs::write(&quotes, changed).unwrap();
-        ingest(&mut conn, &quotes, NOW).unwrap();
+        ingest(&mut conn, &quotes).unwrap();
 
-        let row: (String, String, String, f64, String, i64, i64) = conn
-            .query_row(
-                "SELECT customer_name, customer_phone, tech_name, amount, status, created_at,
-                        last_contact_at
-                 FROM quotes WHERE id = 'Q-1'",
-                [],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                    ))
-                },
-            )
-            .unwrap();
-        let expected = (
-            "Bo".to_string(),
-            "+2".to_string(),
-            "Cy".to_string(),
-            7.5,
-            "dismissed".to_string(),
-            parse_ts("2026-08-03T00:00:00Z").unwrap(),
-            parse_ts("2026-08-04T00:00:00Z").unwrap(),
+        let created_at = parse_ts("2026-08-03T00:00:00Z").unwrap();
+        let last_contact_at = parse_ts("2026-08-04T00:00:00Z").unwrap();
+        let expected = format!(
+            r#"Text("Q-1")|Text("Bo")|Text("+2")|Text("Cy")|Real(7.5)|Text("dismissed")|Integer({created_at})|Integer({last_contact_at})"#
         );
-        assert_eq!(row, expected);
+        assert_eq!(dump_quotes(&conn), [expected]);
     }
 
     #[test]
@@ -595,7 +524,7 @@ mod tests {
             let field = format!(r#""last_contact_at":{last_contact},"status""#);
             let quote = quote_json("Q-1", "open").replace(r#""status""#, &field);
             fs::write(&quotes, format!("[{quote}]")).unwrap();
-            ingest(&mut conn, &quotes, NOW).unwrap();
+            ingest(&mut conn, &quotes).unwrap();
             conn.query_row("SELECT last_contact_at FROM quotes WHERE id = 'Q-1'", [], |row| row.get(0))
                 .unwrap()
         };
@@ -637,7 +566,7 @@ mod tests {
         fs::write(dir.join("events.jsonl"), format!("{accepted}\n{copy}\n")).unwrap();
 
         let mut conn = memory_db();
-        let counts = ingest(&mut conn, &dir, NOW).unwrap();
+        let counts = ingest(&mut conn, &dir).unwrap();
         assert_counts(&counts, (1, 0), (1, 1, 0), (1, 0));
         assert_eq!(status(&conn, "quotes", "Q-1"), "accepted");
         let raw: String = conn
@@ -654,7 +583,7 @@ mod tests {
         fs::write(&quotes, format!("[{}]", quote_json("Q-1", "open"))).unwrap();
         fs::write(&events, event_line("e1", "quote_accepted", "Q-1")).unwrap();
         let mut conn = memory_db();
-        ingest(&mut conn, &dir, NOW).unwrap();
+        ingest(&mut conn, &dir).unwrap();
         let stored_quotes = dump_quotes(&conn);
         let stored_events = dump_events(&conn);
 
@@ -667,7 +596,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(ingest(&mut conn, &dir, NOW).is_err());
+        assert!(ingest(&mut conn, &dir).is_err());
         assert_eq!(status(&conn, "quotes", "Q-1"), "accepted");
         assert_eq!(dump_quotes(&conn), stored_quotes);
         assert_eq!(dump_events(&conn), stored_events);
@@ -678,8 +607,7 @@ mod tests {
         let mut conn = memory_db();
         assert_eq!(stale_days(&conn, NOW).unwrap(), None);
 
-        let seed = Path::new(env!("CARGO_MANIFEST_DIR")).join("seed");
-        ingest(&mut conn, &seed, NOW).unwrap();
+        ingest(&mut conn, &seed()).unwrap();
         assert_eq!(stale_days(&conn, NOW).unwrap(), None);
 
         let newest = parse_ts("2026-08-16T16:00:00Z").unwrap();

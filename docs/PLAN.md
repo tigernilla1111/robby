@@ -17,7 +17,7 @@ High level. Build strictly top to bottom; the hour ends wherever it ends and the
 - `reject` suppresses the quote for one cooldown window so the next run does not re-draft it.
 - Shop name is a constant. Templates have no dollar amount.
 
-Knobs live in one `Policy` struct with defaults. Tests build their own. No CLI overrides in the MVP.
+Knobs live in one `Policy` struct with defaults. No CLI overrides in the MVP.
 
 | Knob | Default |
 |---|---|
@@ -32,7 +32,7 @@ Knobs live in one `Policy` struct with defaults. Tests build their own. No CLI o
 ## Phase 0: Scaffold (MVP)
 
 - cargo project, clap subcommands, `--db` path, `--now`.
-- Schema on startup: `quotes`, `events` (id, type, quote_id, ts, raw line), `messages` (quote, phone, channel, reason, body, must_edit, status, policy_now, idempotency_key, provider id, error, timestamps), `provider_outbox` for the fake sender with `UNIQUE(idempotency_key)`, partial unique index on `customer_phone` where status is pending.
+- Schema on startup: `quotes`, `events` (id, type, quote_id, ts, raw line), `messages` (quote, phone, reason, body, must_edit, status, idempotency_key, provider id, error, timestamps), `provider_outbox` for the fake sender keyed by `idempotency_key`, partial unique index on `customer_phone` where status is pending.
 - `messages.status`: draft, approved, sending, sent, failed, rejected, cancelled.
 
 ## Phase 1: Ingest (MVP)
@@ -69,7 +69,7 @@ Knobs live in one `Policy` struct with defaults. Tests build their own. No CLI o
 - `draft --now`: one insert per candidate that ignores duplicates. A rerun adds nothing for a phone with a pending message. A second quote on that phone is skipped and listed.
 - One SMS template per reason. Placeholders: first name, tech, quote date.
 - `unanswered_reply` gets a placeholder body and `must_edit = 1`.
-- Each row stores `reason`, `policy_now`, and a generated `idempotency_key`.
+- Each row stores `reason` and a generated `idempotency_key`.
 
 ## Phase 4: Approve and send (MVP)
 

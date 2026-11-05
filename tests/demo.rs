@@ -37,7 +37,6 @@ fn has(text: &str, needle: &str) {
     assert!(text.contains(needle), "expected {needle:?} in:\n{text}");
 }
 
-/// The first line starting with `prefix`.
 #[track_caller]
 fn row<'a>(text: &'a str, prefix: &str) -> &'a str {
     match text.lines().find(|line| line.starts_with(prefix)) {
@@ -121,6 +120,14 @@ fn readme_demo_sequence() {
     has(&text, "sent       #1");
     has(&text, "sent: 1, failed: 0, cancelled: 0");
     assert_eq!(provider_rows(&db), 23);
+
+    let text = stdout(&robby(&db, &["run"]));
+    has(&text, "drafted: 0");
+    has(&text, "skipped: 30");
+    assert_eq!(count(&text, "cooldown"), 24);
+    assert_eq!(count(&text, "pending message"), 2);
+    assert_eq!(count(&text, "not open"), 3);
+    assert_eq!(count(&text, "ladder wait"), 1);
 
     let text = stdout(&robby(&db, &["outbox"]));
     let rows: Vec<&str> = text.lines().filter(|line| line.starts_with('#')).collect();

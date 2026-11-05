@@ -3,19 +3,21 @@ mod draft;
 mod ingest;
 mod messages;
 mod policy;
+#[cfg(test)]
+mod testutil;
 mod time;
 
 use clap::{Parser, Subcommand};
 use draft::Draft;
 use ingest::Counts;
 use messages::{Delivery, FakeSender, Message};
-use policy::{DAY, Facts, Listed, Outcome, Policy};
+use policy::{DAY, Facts, Policy, Suppressed};
 use std::error::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+/// Quote follow-up engine
 #[derive(Parser)]
-#[command(name = "robby", about = "Quote follow-up engine")]
 struct Cli {
     /// SQLite database file
     #[arg(long, global = true, default_value = "robby.db")]
@@ -65,22 +67,21 @@ enum Command {
     Outbox,
 }
 
-fn parse_now(s: &str) -> Result<i64, String> {
-    time::parse_ts(s).ok_or_else(|| "expected RFC 3339 or YYYY-MM-DDTHH:MMZ".to_string())
+fn parse_now(s: &str) -> Result<i64, &'static str> {
+    time::parse_ts(s).ok_or("expected RFC 3339 or YYYY-MM-DDTHH:MMZ")
 }
 
-fn quote_line(quote: &Facts, outcome: &Outcome, now: i64) -> String {
+fn quote_line(quote: &Facts, label: &str, now: i64) -> String {
     let days = (now - quote.since_sent()) / DAY;
     let contact = match quote.sends.len() {
         0 => format!("never sent, created {days}d ago"),
         sends => format!("sent {sends}, last {days}d ago"),
     };
     format!(
-        "{:<6}  {:<16}  {:>6}  {:<31}  {contact}, views {}, replies {}",
+        "{:<6}  {:<16}  {:>6}  {label:<31}  {contact}, views {}, replies {}",
         quote.id,
         quote.customer_name,
         format!("${:.0}", quote.amount),
-        outcome.to_string(),
         quote.views.len(),
         quote.replies.len()
     )
@@ -121,16 +122,16 @@ fn print_ingest(counts: &Counts) {
     );
 }
 
-fn print_draft(drafts: &[Draft], skipped: &Listed, now: i64) {
+fn print_draft((drafts, skipped): (Vec<Draft>, Suppressed), now: i64) {
     println!("drafted: {}", drafts.len());
     for (rank, draft) in drafts.iter().enumerate() {
-        let line = quote_line(&draft.quote, &draft.outcome, now);
+        let line = quote_line(&draft.quote, &policy::names(&draft.reasons), now);
         println!("{:>2}. #{:<3} {line}", rank + 1, draft.id);
         println!("         {}", draft.body);
     }
     println!("skipped: {}", skipped.len());
-    for (quote, outcome) in skipped {
-        println!("    {}", quote_line(quote, outcome, now));
+    for (quote, label) in &skipped {
+        println!("    {}", quote_line(quote, label, now));
     }
 }
 
@@ -140,35 +141,30 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn Error>> {
     let mut conn = db::open(&cli.db)?;
     let mut exit = ExitCode::SUCCESS;
     match cli.command {
-        Command::Ingest { path } => print_ingest(&ingest::ingest(&mut conn, &path, now)?),
+        Command::Ingest { path } => print_ingest(&ingest::ingest(&mut conn, &path)?),
         Command::Candidates => {
             let (ranked, suppressed) = policy::candidates(&conn, &Policy::default(), now)?;
             println!("candidates: {}", ranked.len());
-            for (rank, (quote, outcome)) in ranked.iter().enumerate() {
-                println!("{:>2}. {}", rank + 1, quote_line(quote, outcome, now));
+            for (rank, (quote, reasons)) in ranked.iter().enumerate() {
+                println!("{:>2}. {}", rank + 1, quote_line(quote, &policy::names(reasons), now));
             }
             println!("suppressed: {}", suppressed.len());
-            for (quote, outcome) in &suppressed {
-                println!("    {}", quote_line(quote, outcome, now));
+            for (quote, label) in &suppressed {
+                println!("    {}", quote_line(quote, label, now));
             }
         }
-        Command::Draft => {
-            let (drafts, skipped) = draft::draft(&mut conn, &Policy::default(), now)?;
-            print_draft(&drafts, &skipped, now);
-        }
+        Command::Draft => print_draft(draft::draft(&mut conn, &Policy::default(), now)?, now),
         Command::Approve { id: Some(id), body, .. } => {
-            messages::approve(&conn, id, body.as_deref(), now)?;
+            messages::approve(&conn, id, body.as_deref())?;
             println!("approved #{id}");
         }
         Command::Approve { .. } => {
-            let (approved, need_edit) = messages::approve_all(&conn, now)?;
-            println!("approved: {}", approved.len());
-            for msg in &approved {
-                println!(" {}", message_line(msg));
-            }
-            println!("need edit: {}", need_edit.len());
-            for msg in &need_edit {
-                println!(" {}", message_line(msg));
+            let (approved, need_edit) = messages::approve_all(&conn)?;
+            for (title, list) in [("approved", approved), ("need edit", need_edit)] {
+                println!("{title}: {}", list.len());
+                for msg in &list {
+                    println!(" {}", message_line(msg));
+                }
             }
         }
         Command::Reject { id } => {
@@ -176,7 +172,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn Error>> {
             println!("rejected #{id}");
         }
         Command::Send { fail } => {
-            let sender = FakeSender { conn: &conn, now, fail };
+            let sender = FakeSender { conn: &conn, fail };
             let (mut sent, mut failed, mut cancelled) = (0, 0, 0);
             for (msg, delivery) in messages::send(&conn, &Policy::default(), &sender, now)? {
                 let line = message_line(&msg);
@@ -201,9 +197,8 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn Error>> {
             }
         }
         Command::Run { path } => {
-            print_ingest(&ingest::ingest(&mut conn, &path, now)?);
-            let (drafts, skipped) = draft::draft(&mut conn, &Policy::default(), now)?;
-            print_draft(&drafts, &skipped, now);
+            print_ingest(&ingest::ingest(&mut conn, &path)?);
+            print_draft(draft::draft(&mut conn, &Policy::default(), now)?, now);
         }
         Command::Outbox => {
             println!(
@@ -222,11 +217,8 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn Error>> {
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
-        Ok(exit) => exit,
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
-    }
+    run(Cli::parse()).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        ExitCode::FAILURE
+    })
 }

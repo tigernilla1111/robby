@@ -1,15 +1,15 @@
-use crate::policy::{self, Facts, Listed, Outcome, Policy, Reason};
+use crate::policy::{self, Facts, HOUR, Policy, Reason, Suppressed};
 use crate::time;
 use rusqlite::{Connection, params};
 
 const SHOP: &str = "Sunrise Home Services";
 /// New York daylight time.
-const SHOP_UTC_OFFSET: i64 = -4 * 3600;
+const SHOP_UTC_OFFSET: i64 = -4 * HOUR;
 
 pub struct Draft {
     pub id: i64,
     pub quote: Facts,
-    pub outcome: Outcome,
+    pub reasons: Vec<Reason>,
     pub body: String,
 }
 
@@ -53,19 +53,18 @@ pub fn draft(
     conn: &mut Connection,
     policy: &Policy,
     now: i64,
-) -> rusqlite::Result<(Vec<Draft>, Listed)> {
+) -> rusqlite::Result<(Vec<Draft>, Suppressed)> {
     let tx = conn.transaction()?;
     let (ranked, mut skipped) = policy::candidates(&tx, policy, now)?;
     let mut drafts = Vec::new();
-    for (quote, outcome) in ranked {
-        let Outcome::Candidate(reasons) = &outcome else { unreachable!() };
+    for (quote, reasons) in ranked {
         let reason = &reasons[0];
         let body = render(reason, &quote.customer_name, &quote.tech_name, quote.created_at);
         let key = format!("{}:{}", quote.id, time::format_ts(now));
         let inserted = tx.execute(
             "INSERT INTO messages (quote_id, customer_phone, reason, body, must_edit, status,
-                                   policy_now, idempotency_key, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7, ?6, ?6)
+                                   idempotency_key, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7)
              ON CONFLICT DO NOTHING",
             params![
                 quote.id,
@@ -73,14 +72,14 @@ pub fn draft(
                 reason.as_str(),
                 body,
                 *reason == Reason::UnansweredReply,
-                now,
-                key
+                key,
+                now
             ],
         )?;
         if inserted == 1 {
-            drafts.push(Draft { id: tx.last_insert_rowid(), quote, outcome, body });
+            drafts.push(Draft { id: tx.last_insert_rowid(), quote, reasons, body });
         } else {
-            skipped.push((quote, Outcome::Suppressed("already drafted".to_string())));
+            skipped.push((quote, "already drafted".to_string()));
         }
     }
     tx.commit()?;
@@ -90,148 +89,54 @@ pub fn draft(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
     use crate::ingest::ingest;
+    use crate::messages::{self, Message};
     use crate::policy::DAY;
-    use std::path::Path;
+    use crate::testutil::*;
 
-    const NOW: i64 = 1786971600;
-    const PHONE: &str = "+15550000";
-
-    const EXPECTED: [(&str, &str); 25] = [
-        ("Q-1016", "unanswered_reply"),
-        ("Q-1007", "unanswered_reply"),
-        ("Q-1015", "unanswered_reply"),
-        ("Q-1021", "xl_quote_stale"),
-        ("Q-1026", "xl_quote_stale"),
-        ("Q-1012", "xl_quote_stale"),
-        ("Q-1027", "xl_quote_stale"),
-        ("Q-1023", "xl_quote_stale"),
-        ("Q-1020", "xl_quote_stale"),
-        ("Q-1010", "xl_quote_stale"),
-        ("Q-1022", "xl_quote_stale"),
-        ("Q-1002", "xl_quote_stale"),
-        ("Q-1008", "repeat_views"),
-        ("Q-1001", "repeat_views"),
-        ("Q-1000", "repeat_views"),
-        ("Q-1028", "repeat_views"),
-        ("Q-1024", "never_contacted"),
-        ("Q-1025", "never_contacted"),
-        ("Q-1018", "never_contacted"),
-        ("Q-1014", "never_viewed"),
-        ("Q-1005", "never_viewed"),
-        ("Q-1013", "never_viewed"),
-        ("Q-1006", "stale"),
-        ("Q-1011", "stale"),
-        ("Q-1029", "stale"),
-    ];
-
-    const SKIPPED: [&str; 5] = [
-        "Q-1003: same phone as Q-1025",
-        "Q-1004: not open",
-        "Q-1009: not open",
-        "Q-1017: not open",
-        "Q-1019: ladder wait",
-    ];
-
-    struct Row {
-        id: i64,
-        quote_id: String,
-        customer_phone: String,
-        reason: String,
-        body: String,
-        must_edit: bool,
-        status: String,
-        policy_now: i64,
-        idempotency_key: String,
-        created_at: i64,
-    }
-
-    fn memory_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        db::migrate(&conn).unwrap();
-        conn
-    }
-
-    fn add_quote(conn: &Connection, id: &str, phone: &str) {
-        conn.execute(
-            "INSERT INTO quotes (id, customer_name, customer_phone, tech_name, amount, status,
-                                 created_at)
-             VALUES (?1, 'Ann', ?2, 'Brad', 1000, 'open', ?3)",
-            params![id, phone, NOW - 10 * DAY],
-        )
-        .unwrap();
-    }
-
-    fn rows(conn: &Connection) -> Vec<Row> {
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, quote_id, customer_phone, reason, body, must_edit, status, policy_now,
-                        idempotency_key, created_at
-                 FROM messages ORDER BY id",
-            )
-            .unwrap();
-        stmt.query_map([], |row| {
-            Ok(Row {
-                id: row.get(0)?,
-                quote_id: row.get(1)?,
-                customer_phone: row.get(2)?,
-                reason: row.get(3)?,
-                body: row.get(4)?,
-                must_edit: row.get(5)?,
-                status: row.get(6)?,
-                policy_now: row.get(7)?,
-                idempotency_key: row.get(8)?,
-                created_at: row.get(9)?,
-            })
-        })
-        .unwrap()
-        .map(Result::unwrap)
-        .collect()
+    fn rows(conn: &Connection) -> Vec<Message> {
+        messages::list(conn).unwrap()
     }
 
     fn run(conn: &mut Connection, now: i64) -> (Vec<Draft>, Vec<String>) {
         let (drafts, skipped) = draft(conn, &Policy::default(), now).unwrap();
-        let labels = skipped.iter().map(|(quote, outcome)| format!("{}: {outcome}", quote.id));
+        let labels = skipped.iter().map(|(quote, label)| format!("{}: {label}", quote.id));
         (drafts, labels.collect())
     }
 
-    fn set_newest(conn: &Connection, status: &str, updated_at: i64, sent_at: Option<i64>) {
+    fn set_newest(conn: &Connection, status: &str, at: Option<i64>) {
         conn.execute(
-            "UPDATE messages SET status = ?1, updated_at = ?2, sent_at = ?3
+            "UPDATE messages SET status = ?1, rejected_at = ?2, sent_at = ?2
              WHERE id = (SELECT MAX(id) FROM messages)",
-            params![status, updated_at, sent_at],
+            params![status, at],
         )
         .unwrap();
     }
 
     #[test]
     fn seed_draft_twice_inserts_once() {
-        let seed = Path::new(env!("CARGO_MANIFEST_DIR")).join("seed");
         let mut conn = memory_db();
-        ingest(&mut conn, &seed, NOW).unwrap();
+        ingest(&mut conn, &seed()).unwrap();
 
         let (drafts, skipped) = run(&mut conn, NOW);
-        assert_eq!(skipped, SKIPPED);
+        assert_eq!(skipped, GOLDEN[25..]);
 
         let stored = rows(&conn);
-        let reasons: Vec<(&str, &str)> =
-            stored.iter().map(|row| (row.quote_id.as_str(), row.reason.as_str())).collect();
-        assert_eq!(reasons, EXPECTED);
+        assert_eq!(stored.len(), 25);
         assert_eq!(drafts.len(), 25);
 
-        for (row, draft) in stored.iter().zip(&drafts) {
+        for ((row, draft), golden) in stored.iter().zip(&drafts).zip(GOLDEN) {
+            assert!(golden.starts_with(&format!("{}: {}", row.quote_id, row.reason)), "{golden}");
             assert_eq!(row.id, draft.id);
             assert_eq!(row.quote_id, draft.quote.id);
-            assert!(draft.outcome.to_string().starts_with(&row.reason), "{}", row.quote_id);
+            assert_eq!(draft.reasons[0].as_str(), row.reason);
             assert_eq!(row.body, draft.body);
             assert!(row.body.len() <= 160, "{}", row.body);
             assert!(!row.body.contains('$'), "{}", row.body);
             assert_eq!(row.status, "draft");
-            assert_eq!(row.policy_now, NOW);
             assert_eq!(row.created_at, NOW);
-            assert_eq!(row.customer_phone, draft.quote.phone);
-            assert_eq!(row.idempotency_key, format!("{}:2026-08-17T13:00:00Z", row.quote_id));
+            assert_eq!(row.phone, draft.quote.phone);
+            assert_eq!(row.key, format!("{}:2026-08-17T13:00:00Z", row.quote_id));
             assert_eq!(
                 row.must_edit,
                 ["Q-1016", "Q-1007", "Q-1015"].contains(&row.quote_id.as_str())
@@ -286,13 +191,13 @@ mod tests {
         assert_eq!(rows(&conn).len(), 1);
 
         // The only path to the conflict clause: not pending, same now, same key.
-        set_newest(&conn, "cancelled", NOW, None);
+        set_newest(&conn, "cancelled", None);
         let (drafts, skipped) = run(&mut conn, NOW);
         assert!(drafts.is_empty());
         assert_eq!(skipped, ["Q-1: already drafted"]);
         assert_eq!(rows(&conn).len(), 1);
 
-        set_newest(&conn, "rejected", NOW, None);
+        set_newest(&conn, "rejected", Some(NOW));
         let (drafts, skipped) = run(&mut conn, NOW);
         assert!(drafts.is_empty());
         assert_eq!(skipped, ["Q-1: rejected"]);
@@ -301,13 +206,13 @@ mod tests {
         assert_eq!(run(&mut conn, later).0.len(), 1);
         let stored = rows(&conn);
         assert_eq!(stored.len(), 2);
-        assert_eq!(stored[1].idempotency_key, format!("Q-1:{}", time::format_ts(later)));
+        assert_eq!(stored[1].key, format!("Q-1:{}", time::format_ts(later)));
 
-        set_newest(&conn, "cancelled", later, None);
+        set_newest(&conn, "cancelled", None);
         assert_eq!(run(&mut conn, NOW + 4 * DAY).0.len(), 1);
         assert_eq!(rows(&conn).len(), 3);
 
-        set_newest(&conn, "sent", NOW + 4 * DAY, Some(NOW + 4 * DAY));
+        set_newest(&conn, "sent", Some(NOW + 4 * DAY));
         let (drafts, skipped) = run(&mut conn, NOW + 5 * DAY);
         assert!(drafts.is_empty());
         assert_eq!(skipped, ["Q-1: cooldown"]);

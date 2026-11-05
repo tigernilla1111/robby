@@ -1,5 +1,4 @@
-use chrono::{DateTime, NaiveDateTime};
-use std::time::{SystemTime, UNIX_EPOCH};
+use chrono::{DateTime, NaiveDateTime, Utc};
 
 /// RFC 3339, so fractions and offsets from webhooks parse, or the short form without seconds.
 pub fn parse_ts(s: &str) -> Option<i64> {
@@ -24,10 +23,7 @@ pub fn format_date(ts: i64) -> String {
 }
 
 pub fn wall_clock() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock after 1970")
-        .as_secs() as i64
+    Utc::now().timestamp()
 }
 
 #[cfg(test)]

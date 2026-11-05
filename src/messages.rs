@@ -3,6 +3,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::BTreeMap;
 use std::error::Error;
 
+#[derive(Debug, PartialEq)]
 pub struct Message {
     pub id: i64,
     pub quote_id: String,
@@ -26,7 +27,6 @@ pub trait Sender {
 /// Stands in for the provider: a key it has seen stores nothing and returns the first id.
 pub struct FakeSender<'a> {
     pub conn: &'a Connection,
-    pub now: i64,
     /// Quote whose ack is lost: the text is stored, then the call errors.
     pub fail: Option<String>,
 }
@@ -35,10 +35,10 @@ impl Sender for FakeSender<'_> {
     fn send(&self, msg: &Message) -> Result<String, String> {
         self.conn
             .execute(
-                "INSERT INTO provider_outbox (idempotency_key, provider_id, to_phone, body, sent_at)
-                 VALUES (?1, 'sm_' || lower(hex(randomblob(4))), ?2, ?3, ?4)
+                "INSERT INTO provider_outbox (idempotency_key, provider_id, to_phone, body)
+                 VALUES (?1, 'sm_' || lower(hex(randomblob(4))), ?2, ?3)
                  ON CONFLICT DO NOTHING",
-                params![msg.key, msg.phone, msg.body, self.now],
+                params![msg.key, msg.phone, msg.body],
             )
             .map_err(|e| e.to_string())?;
         let provider_id = self
@@ -81,7 +81,6 @@ fn select(conn: &Connection, filter: &str) -> rusqlite::Result<Vec<Message>> {
     .collect()
 }
 
-/// Every message, whatever its status.
 pub fn list(conn: &Connection) -> rusqlite::Result<Vec<Message>> {
     select(conn, "TRUE")
 }
@@ -100,21 +99,16 @@ fn refusal(conn: &Connection, id: i64, wrong_status: &str) -> Result<(), Box<dyn
 }
 
 /// A must-edit row needs a `body` unlike the stored text, so its placeholder never goes out.
-pub fn approve(
-    conn: &Connection,
-    id: i64,
-    body: Option<&str>,
-    now: i64,
-) -> Result<(), Box<dyn Error>> {
+pub fn approve(conn: &Connection, id: i64, body: Option<&str>) -> Result<(), Box<dyn Error>> {
     let body = body.map(str::trim);
     if body == Some("") {
         return Err("empty body".into());
     }
     let changed = conn.execute(
-        "UPDATE messages SET status = 'approved', body = COALESCE(?2, body), updated_at = ?3
+        "UPDATE messages SET status = 'approved', body = COALESCE(?2, body)
          WHERE id = ?1 AND status IN ('draft','approved')
-           AND (must_edit = 0 OR (?2 IS NOT NULL AND ?2 <> body))",
-        params![id, body, now],
+           AND (must_edit = 0 OR ?2 <> body)",
+        params![id, body],
     )?;
     if changed == 0 {
         return refusal(conn, id, "not draft");
@@ -123,21 +117,17 @@ pub fn approve(
 }
 
 /// Approves every plain draft. Returns the approved rows and the must-edit rows it skipped.
-pub fn approve_all(conn: &Connection, now: i64) -> rusqlite::Result<(Vec<Message>, Vec<Message>)> {
+pub fn approve_all(conn: &Connection) -> rusqlite::Result<(Vec<Message>, Vec<Message>)> {
     let (need_edit, approved) =
         select(conn, "status = 'draft'")?.into_iter().partition(|msg| msg.must_edit);
-    conn.execute(
-        "UPDATE messages SET status = 'approved', updated_at = ?1
-         WHERE status = 'draft' AND must_edit = 0",
-        [now],
-    )?;
+    let sql = "UPDATE messages SET status = 'approved' WHERE status = 'draft' AND must_edit = 0";
+    conn.execute(sql, [])?;
     Ok((approved, need_edit))
 }
 
-/// `updated_at` starts the quote's rejected window.
 pub fn reject(conn: &Connection, id: i64, now: i64) -> Result<(), Box<dyn Error>> {
     let changed = conn.execute(
-        "UPDATE messages SET status = 'rejected', updated_at = ?2
+        "UPDATE messages SET status = 'rejected', rejected_at = ?2
          WHERE id = ?1 AND status IN ('draft','approved')",
         params![id, now],
     )?;
@@ -163,10 +153,7 @@ fn blocked(
     }
     // The customer is the phone, so a reply on an open sibling quote counts. Compared with our
     // last send, not the draft's age: a reply can be stamped before the draft and ingested after.
-    let replied = facts
-        .values()
-        .filter(|q| q.open && q.phone == msg.phone)
-        .any(|q| q.replies.last() > q.sends.last());
+    let replied = facts.values().any(|q| q.open && q.phone == msg.phone && q.unanswered_reply());
     // A must-edit row is the answer, so neither check below applies. Once a send answers the
     // reply, `replied` is false and the row is outreach like any other.
     if msg.must_edit && replied {
@@ -202,9 +189,9 @@ pub fn send(
         let facts = load_facts(conn, now)?;
         if let Some(reason) = blocked(policy, &facts, &msg, now) {
             let cancelled = conn.execute(
-                "UPDATE messages SET status = 'cancelled', error = ?2, updated_at = ?3
+                "UPDATE messages SET status = 'cancelled', error = ?2
                  WHERE id = ?1 AND status IN ('approved','failed')",
-                params![msg.id, reason, now],
+                params![msg.id, reason],
             )?;
             if cancelled == 1 {
                 results.push((msg, Delivery::Cancelled(reason)));
@@ -216,7 +203,7 @@ pub fn send(
         // with the claim, so an edit approved since the run began is the text that goes out.
         let claimed = conn
             .query_row(
-                "UPDATE messages SET status = 'sending', sent_at = ?2, updated_at = ?2
+                "UPDATE messages SET status = 'sending', sent_at = ?2
                  WHERE id = ?1 AND status IN ('approved','failed')
                  RETURNING body",
                 params![msg.id, now],
@@ -233,10 +220,9 @@ pub fn send(
         let delivery = match sender.send(&msg) {
             Ok(provider_id) => {
                 let marked = conn.execute(
-                    "UPDATE messages SET status = 'sent', provider_id = ?2, error = NULL,
-                                         updated_at = ?3
+                    "UPDATE messages SET status = 'sent', provider_id = ?2, error = NULL
                      WHERE id = ?1 AND status = 'sending'",
-                    params![msg.id, provider_id, now],
+                    params![msg.id, provider_id],
                 )?;
                 if marked == 0 {
                     // The text still went out, so its id is kept.
@@ -251,9 +237,9 @@ pub fn send(
             }
             Err(error) => {
                 let marked = conn.execute(
-                    "UPDATE messages SET status = 'failed', error = ?2, updated_at = ?3
+                    "UPDATE messages SET status = 'failed', error = ?2
                      WHERE id = ?1 AND status = 'sending'",
-                    params![msg.id, error, now],
+                    params![msg.id, error],
                 )?;
                 if marked == 0 {
                     Delivery::Cancelled("cancelled during send")
@@ -270,80 +256,23 @@ pub fn send(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
     use crate::draft::draft;
     use crate::ingest::ingest;
-    use crate::policy::{self, DAY};
+    use crate::policy::{DAY, HOUR};
+    use crate::testutil::*;
     use crate::time;
-    use std::path::Path;
-
-    const NOW: i64 = 1786971600;
-    const HOUR: i64 = 3600;
-    const PHONE: &str = "+15550000";
-
-    #[derive(Debug, PartialEq)]
-    struct Row {
-        status: String,
-        provider_id: Option<String>,
-        error: Option<String>,
-        sent_at: Option<i64>,
-        must_edit: bool,
-        body: String,
-        updated_at: i64,
-    }
-
-    fn memory_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        db::migrate(&conn).unwrap();
-        conn
-    }
-
-    fn add_quote(conn: &Connection, id: &str, phone: &str) {
-        conn.execute(
-            "INSERT INTO quotes (id, customer_name, customer_phone, tech_name, amount, status,
-                                 created_at)
-             VALUES (?1, 'Ann', ?2, 'Brad', 1000, 'open', ?3)",
-            params![id, phone, NOW - 10 * DAY],
-        )
-        .unwrap();
-    }
-
-    fn add_event(conn: &Connection, event_type: &str, quote_id: &str, ts: i64) {
-        conn.execute(
-            "INSERT INTO events (event_id, type, quote_id, ts, raw)
-             VALUES (hex(randomblob(8)), ?1, ?2, ?3, '{}')",
-            params![event_type, quote_id, ts],
-        )
-        .unwrap();
-    }
 
     fn fake<'a>(conn: &'a Connection, fail: Option<&str>) -> FakeSender<'a> {
-        FakeSender { conn, now: NOW, fail: fail.map(str::to_string) }
+        FakeSender { conn, fail: fail.map(str::to_string) }
     }
 
-    fn row(conn: &Connection, id: i64) -> Row {
-        conn.query_row(
-            "SELECT status, provider_id, error, sent_at, must_edit, body, updated_at
-             FROM messages WHERE id = ?1",
-            [id],
-            |row| {
-                Ok(Row {
-                    status: row.get(0)?,
-                    provider_id: row.get(1)?,
-                    error: row.get(2)?,
-                    sent_at: row.get(3)?,
-                    must_edit: row.get(4)?,
-                    body: row.get(5)?,
-                    updated_at: row.get(6)?,
-                })
-            },
-        )
-        .unwrap()
+    fn row(conn: &Connection, id: i64) -> Message {
+        select(conn, &format!("id = {id}")).unwrap().remove(0)
     }
 
     fn outbox(conn: &Connection) -> Vec<(String, String)> {
         let mut stmt = conn
-            .prepare("SELECT idempotency_key, provider_id FROM provider_outbox ORDER BY id")
+            .prepare("SELECT idempotency_key, provider_id FROM provider_outbox ORDER BY rowid")
             .unwrap();
         stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .unwrap()
@@ -360,12 +289,6 @@ mod tests {
         sent.into_iter().map(|(msg, delivery)| (msg.id, delivery)).collect()
     }
 
-    fn labels(conn: &Connection, now: i64) -> Vec<String> {
-        let (ranked, suppressed) = policy::candidates(conn, &Policy::default(), now).unwrap();
-        let all = ranked.into_iter().chain(suppressed);
-        all.map(|(quote, outcome)| format!("{}: {outcome}", quote.id)).collect()
-    }
-
     fn ids(messages: &[Message]) -> Vec<i64> {
         messages.iter().map(|msg| msg.id).collect()
     }
@@ -379,15 +302,24 @@ mod tests {
         let mut conn = memory_db();
         add_quote(&conn, "Q-1", PHONE);
         run_draft(&mut conn, NOW);
-        approve(&conn, 1, None, NOW).unwrap();
+        approve(&conn, 1, None).unwrap();
+        conn
+    }
+
+    /// Q-1 with a customer reply, answered by a human as #1.
+    fn approved_answer() -> Connection {
+        let mut conn = memory_db();
+        add_quote(&conn, "Q-1", PHONE);
+        add_event(&conn, "customer_replied", "Q-1", NOW - DAY);
+        run_draft(&mut conn, NOW);
+        approve(&conn, 1, Some("Hi Ann")).unwrap();
         conn
     }
 
     /// Runs ingest's real cancellation: the seed's events touch none of these tests' quotes.
     fn close_and_ingest(conn: &mut Connection, quote_id: &str) {
         conn.execute("UPDATE quotes SET status = 'accepted' WHERE id = ?1", [quote_id]).unwrap();
-        let events = Path::new(env!("CARGO_MANIFEST_DIR")).join("seed/events.jsonl");
-        assert_eq!(ingest(conn, &events, NOW).unwrap().cancelled, 1);
+        assert_eq!(ingest(conn, &seed().join("events.jsonl")).unwrap().cancelled, 1);
     }
 
     #[test]
@@ -400,40 +332,40 @@ mod tests {
         let placeholder = row(&conn, 1).body;
         assert!(row(&conn, 1).must_edit);
 
-        assert!(refused(approve(&conn, 1, None, NOW)).contains("must be edited"));
+        assert!(refused(approve(&conn, 1, None)).contains("must be edited"));
         assert_eq!(row(&conn, 1).status, "draft");
-        assert_eq!(refused(approve(&conn, 1, Some("  "), NOW)), "empty body");
+        assert_eq!(refused(approve(&conn, 1, Some("  "))), "empty body");
         assert_eq!(
-            refused(approve(&conn, 1, Some(&placeholder), NOW)),
+            refused(approve(&conn, 1, Some(&placeholder))),
             "message #1 must be edited: pass a new --body"
         );
         assert_eq!(row(&conn, 1).status, "draft");
 
-        approve(&conn, 1, Some(" Hi Ann "), NOW).unwrap();
+        approve(&conn, 1, Some(" Hi Ann ")).unwrap();
         let approved = row(&conn, 1);
         assert_eq!((approved.status.as_str(), approved.body.as_str()), ("approved", "Hi Ann"));
         assert!(approved.must_edit);
 
-        approve(&conn, 1, Some("Hi again"), NOW).unwrap();
+        approve(&conn, 1, Some("Hi again")).unwrap();
         assert_eq!(row(&conn, 1).body, "Hi again");
-        assert!(refused(approve(&conn, 1, None, NOW)).contains("must be edited"));
+        assert!(refused(approve(&conn, 1, None)).contains("must be edited"));
         assert_eq!(row(&conn, 1).body, "Hi again");
 
-        assert_eq!(refused(approve(&conn, 99, None, NOW)), "no message #99");
+        assert_eq!(refused(approve(&conn, 99, None)), "no message #99");
 
         let template = row(&conn, 2).body;
-        approve(&conn, 2, None, NOW).unwrap();
+        approve(&conn, 2, None).unwrap();
         let plain = row(&conn, 2);
         assert_eq!((plain.status.as_str(), plain.body), ("approved", template));
         assert!(!plain.must_edit);
 
-        approve(&conn, 2, Some("custom"), NOW).unwrap();
+        approve(&conn, 2, Some("custom")).unwrap();
         let plain = row(&conn, 2);
         assert_eq!(plain.body, "custom");
         assert!(!plain.must_edit);
 
         assert_eq!(run_send(&conn, None).len(), 2);
-        assert_eq!(refused(approve(&conn, 2, None, NOW)), "message #2 is sent, not draft");
+        assert_eq!(refused(approve(&conn, 2, None)), "message #2 is sent, not draft");
     }
 
     #[test]
@@ -445,18 +377,19 @@ mod tests {
         add_event(&conn, "customer_replied", "Q-1", NOW - DAY);
         assert_eq!(run_draft(&mut conn, NOW - HOUR), 3);
 
-        let (approved, need_edit) = approve_all(&conn, NOW).unwrap();
+        let (approved, need_edit) = approve_all(&conn).unwrap();
         assert_eq!((ids(&approved), ids(&need_edit)), (vec![2, 3], vec![1]));
         let statuses = |conn: &Connection| [1, 2, 3].map(|id| row(conn, id).status);
         assert_eq!(statuses(&conn), ["draft", "approved", "approved"]);
 
-        let (approved, need_edit) = approve_all(&conn, NOW).unwrap();
+        let (approved, need_edit) = approve_all(&conn).unwrap();
         assert_eq!((ids(&approved), ids(&need_edit)), (vec![], vec![1]));
         assert_eq!(statuses(&conn), ["draft", "approved", "approved"]);
 
         reject(&conn, 3, NOW + 1).unwrap();
         assert_eq!(row(&conn, 3).status, "rejected");
-        assert_eq!(row(&conn, 3).updated_at, NOW + 1);
+        let sql = "SELECT rejected_at FROM messages WHERE id = 3";
+        assert_eq!(conn.query_row(sql, [], |row| row.get(0)), Ok(NOW + 1));
         assert_eq!(refused(reject(&conn, 3, NOW)), "message #3 is rejected, cannot reject");
 
         reject(&conn, 1, NOW).unwrap();
@@ -553,29 +486,17 @@ mod tests {
         add_event(&conn, "customer_replied", "Q-1", NOW - DAY);
         assert_cancelled(&conn, "customer replied");
 
-        let mut conn = memory_db();
-        add_quote(&conn, "Q-2", PHONE);
-        add_event(&conn, "customer_replied", "Q-2", NOW - DAY);
-        run_draft(&mut conn, NOW);
-        approve(&conn, 1, Some("Hi Ann"), NOW).unwrap();
+        let conn = approved_answer();
         assert!(matches!(run_send(&conn, None)[..], [(1, Delivery::Sent(_))]));
 
         // A sibling's send doesn't hold back the answer to a reply.
-        let mut conn = memory_db();
-        add_quote(&conn, "Q-1", PHONE);
-        add_event(&conn, "customer_replied", "Q-1", NOW - DAY);
-        run_draft(&mut conn, NOW);
-        approve(&conn, 1, Some("Hi Ann"), NOW).unwrap();
+        let conn = approved_answer();
         add_quote(&conn, "Q-2", PHONE);
         add_event(&conn, "message_sent", "Q-2", NOW - HOUR);
         assert!(matches!(run_send(&conn, None)[..], [(1, Delivery::Sent(_))]));
 
         // Our later send answered the reply, so the row is no longer one.
-        let mut conn = memory_db();
-        add_quote(&conn, "Q-1", PHONE);
-        add_event(&conn, "customer_replied", "Q-1", NOW - DAY);
-        run_draft(&mut conn, NOW);
-        approve(&conn, 1, Some("Hi Ann"), NOW).unwrap();
+        let conn = approved_answer();
         add_event(&conn, "message_sent", "Q-1", NOW - HOUR);
         assert_cancelled(&conn, "cooldown");
 
@@ -608,7 +529,7 @@ mod tests {
         add_quote(&conn, "Q-1", PHONE);
         add_quote(&conn, "Q-2", PHONE);
         assert_eq!(run_draft(&mut conn, NOW), 1);
-        approve(&conn, 1, None, NOW).unwrap();
+        approve(&conn, 1, None).unwrap();
         run_send(&conn, Some("Q-1"));
         assert_eq!(row(&conn, 1).status, "failed");
 
@@ -675,7 +596,7 @@ mod tests {
             add_quote(&conn, &format!("Q-{n}"), &format!("+1555000{n}"));
         }
         assert_eq!(run_draft(&mut conn, NOW), 4);
-        approve_all(&conn, NOW).unwrap();
+        approve_all(&conn).unwrap();
 
         let probe = Probe(fake(&conn, None));
         let results = send(&conn, &Policy::default(), &probe, NOW).unwrap();
@@ -709,7 +630,7 @@ mod tests {
     impl Sender for EditsNext<'_> {
         fn send(&self, msg: &Message) -> Result<String, String> {
             if msg.id == 1 {
-                approve(self.0.conn, 2, Some("edited"), NOW).unwrap();
+                approve(self.0.conn, 2, Some("edited")).unwrap();
             }
             self.0.send(msg)
         }
@@ -721,7 +642,7 @@ mod tests {
         add_quote(&conn, "Q-1", "+15550001");
         add_quote(&conn, "Q-2", "+15550002");
         assert_eq!(run_draft(&mut conn, NOW), 2);
-        approve_all(&conn, NOW).unwrap();
+        approve_all(&conn).unwrap();
 
         send(&conn, &Policy::default(), &EditsNext(fake(&conn, None)), NOW).unwrap();
 
@@ -729,77 +650,5 @@ mod tests {
         let delivered: String = conn.query_row(sql, [], |row| row.get(0)).unwrap();
         assert_eq!(delivered, "edited");
         assert_eq!(row(&conn, 2).status, "sent");
-    }
-
-    fn count(labels: &[String], label: &str) -> usize {
-        labels.iter().filter(|line| line.ends_with(&format!(": {label}"))).count()
-    }
-
-    fn statuses(conn: &Connection, status: &str) -> i64 {
-        let sql = "SELECT COUNT(*) FROM messages WHERE status = ?1";
-        conn.query_row(sql, [status], |row| row.get(0)).unwrap()
-    }
-
-    #[test]
-    fn seed_scripted_run() {
-        let seed = Path::new(env!("CARGO_MANIFEST_DIR")).join("seed");
-        let mut conn = memory_db();
-        let counts = ingest(&mut conn, &seed, NOW).unwrap();
-        assert_eq!((counts.quotes_stored, counts.events_stored), (30, 82));
-        assert_eq!((counts.events_duplicate, counts.promoted, counts.cancelled), (6, 0, 0));
-
-        assert_eq!(run_draft(&mut conn, NOW), 25);
-
-        let (approved, need_edit) = approve_all(&conn, NOW).unwrap();
-        assert_eq!(ids(&approved), (4..=25).collect::<Vec<_>>());
-        let must_edit: Vec<_> = need_edit.iter().map(|msg| (msg.id, &*msg.quote_id)).collect();
-        assert_eq!(must_edit, [(1, "Q-1016"), (2, "Q-1007"), (3, "Q-1015")]);
-
-        let results = run_send(&conn, None);
-        assert_eq!(results.iter().map(|(id, _)| *id).collect::<Vec<_>>(), ids(&approved));
-        assert!(results.iter().all(|(_, delivery)| matches!(delivery, Delivery::Sent(_))));
-        assert_eq!((statuses(&conn, "sent"), statuses(&conn, "draft")), (22, 3));
-        assert_eq!(row(&conn, 4).sent_at, Some(NOW));
-        assert_eq!(outbox(&conn).len(), 22);
-
-        assert_eq!(run_send(&conn, None), []);
-        assert_eq!(outbox(&conn).len(), 22);
-
-        let lines = labels(&conn, NOW);
-        assert_eq!(lines.len(), 30);
-        assert_eq!(count(&lines, "cooldown"), 23);
-        assert_eq!(count(&lines, "pending message"), 3);
-        assert_eq!(count(&lines, "not open"), 3);
-        assert!(lines.contains(&"Q-1019: ladder wait".to_string()));
-
-        assert!(refused(approve(&conn, 1, None, NOW)).contains("must be edited"));
-        let reply = "Hi Ray, thanks for your message about the quote. We can do Tuesday.";
-        approve(&conn, 1, Some(reply), NOW).unwrap();
-        assert!(row(&conn, 1).must_edit);
-
-        let results = run_send(&conn, Some("Q-1016"));
-        assert!(matches!(results[..], [(1, Delivery::Failed(_))]));
-        let failed = row(&conn, 1);
-        assert_eq!(failed.status, "failed");
-        assert!(failed.error.is_some());
-        assert_eq!(failed.provider_id, None);
-        assert_eq!(outbox(&conn).len(), 23);
-
-        let stored = outbox(&conn)[22].1.clone();
-        assert_eq!(run_send(&conn, None), [(1, Delivery::Sent(stored.clone()))]);
-        let sent = row(&conn, 1);
-        assert_eq!(sent.status, "sent");
-        assert_eq!(sent.provider_id, Some(stored));
-        assert_eq!(sent.error, None);
-        assert!(sent.must_edit);
-        assert_eq!(outbox(&conn).len(), 23);
-
-        let lines = labels(&conn, NOW);
-        assert_eq!(lines.len(), 30);
-        assert_eq!(count(&lines, "cooldown"), 24);
-        assert_eq!(count(&lines, "pending message"), 2);
-        assert_eq!(count(&lines, "not open"), 3);
-        assert_eq!(count(&lines, "ladder wait"), 1);
-        assert_eq!(run_draft(&mut conn, NOW), 0);
     }
 }
