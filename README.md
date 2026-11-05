@@ -154,13 +154,12 @@ The harder problem is people. Fifty owners won't all check their drafts every da
 1. An interactive review loop: yes, no or edit for each draft, in the terminal first and later on a simple localhost page
 2. A central data store for all quotes and events, to find better ways to prioritize clients, plus an admin portal for one person running several shops
 3. Automated orchestration, possibly an LLM that tailors, audits and approves messages
-4. A review pass to simplify the code
-5. Showing the customer's reply next to must-edit drafts
-6. More channels: email, then WhatsApp, Facebook Messenger and Discord
-7. Per-shop policy: wait times, attempt limits, give-up period and time zone
-8. Research into the best timing and wording, by type of trade
-9. Dynamic and multiple quote thresholds, so "big" scales with the business
-10. Auto-tuning the policy from each shop's own results
+4. Showing the customer's reply next to must-edit drafts
+5. More channels: email, then WhatsApp, Facebook Messenger and Discord
+6. Per-shop policy: wait times, attempt limits, give-up period and time zone
+7. Research into the best timing and wording, by type of trade
+8. Dynamic and multiple quote thresholds, so "big" scales with the business
+9. Auto-tuning the policy from each shop's own results
 
 ## Where I stopped
 
