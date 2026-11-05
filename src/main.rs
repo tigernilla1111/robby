@@ -6,8 +6,10 @@ mod policy;
 mod time;
 
 use clap::{Parser, Subcommand};
+use draft::Draft;
+use ingest::Counts;
 use messages::{Delivery, FakeSender, Message};
-use policy::{DAY, Facts, Outcome, Policy};
+use policy::{DAY, Facts, Listed, Outcome, Policy};
 use std::error::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -54,6 +56,13 @@ enum Command {
         #[arg(long, value_name = "QUOTE")]
         fail: Option<String>,
     },
+    /// Ingest a path, then draft
+    Run {
+        #[arg(default_value = "seed")]
+        path: PathBuf,
+    },
+    /// List every message with its status, reason, timestamps, provider id and error
+    Outbox,
 }
 
 fn parse_now(s: &str) -> Result<i64, String> {
@@ -82,27 +91,57 @@ fn message_line(msg: &Message) -> String {
     format!("#{:<3} {:<7} {:<13} {}", msg.id, msg.quote_id, msg.phone, msg.reason)
 }
 
+fn outbox_line(msg: &Message) -> String {
+    let attempted = msg.sent_at.map_or("-".to_string(), time::format_ts);
+    let stuck = if msg.status == "sending" { "  STUCK" } else { "" };
+    format!(
+        "#{:<3} {:<7} {:<13} {:<9}  {:<18}  {}  {attempted:<20}  {:<11}  {}{stuck}",
+        msg.id,
+        msg.quote_id,
+        msg.phone,
+        msg.status,
+        msg.reason,
+        time::format_ts(msg.created_at),
+        msg.provider_id.as_deref().unwrap_or("-"),
+        msg.error.as_deref().unwrap_or("-")
+    )
+}
+
+fn print_ingest(counts: &Counts) {
+    println!(
+        "quotes: {} stored, {} skipped",
+        counts.quotes_stored, counts.quotes_skipped
+    );
+    println!(
+        "events: {} stored, {} duplicates ignored, {} skipped",
+        counts.events_stored, counts.events_duplicate, counts.events_skipped
+    );
+    println!(
+        "promoted: {}, cancelled: {}",
+        counts.promoted, counts.cancelled
+    );
+}
+
+fn print_draft(drafts: &[Draft], skipped: &Listed, now: i64) {
+    println!("drafted: {}", drafts.len());
+    for (rank, draft) in drafts.iter().enumerate() {
+        let line = quote_line(&draft.quote, &draft.outcome, now);
+        println!("{:>2}. #{:<3} {line}", rank + 1, draft.id);
+        println!("         {}", draft.body);
+    }
+    println!("skipped: {}", skipped.len());
+    for (quote, outcome) in skipped {
+        println!("    {}", quote_line(quote, outcome, now));
+    }
+}
+
 fn run(cli: Cli) -> Result<ExitCode, Box<dyn Error>> {
     let now = cli.now.unwrap_or_else(time::wall_clock);
     println!("now: {}", time::format_ts(now));
     let mut conn = db::open(&cli.db)?;
     let mut exit = ExitCode::SUCCESS;
     match cli.command {
-        Command::Ingest { path } => {
-            let counts = ingest::ingest(&mut conn, &path, now)?;
-            println!(
-                "quotes: {} stored, {} skipped",
-                counts.quotes_stored, counts.quotes_skipped
-            );
-            println!(
-                "events: {} stored, {} duplicates ignored, {} skipped",
-                counts.events_stored, counts.events_duplicate, counts.events_skipped
-            );
-            println!(
-                "promoted: {}, cancelled: {}",
-                counts.promoted, counts.cancelled
-            );
-        }
+        Command::Ingest { path } => print_ingest(&ingest::ingest(&mut conn, &path, now)?),
         Command::Candidates => {
             let (ranked, suppressed) = policy::candidates(&conn, &Policy::default(), now)?;
             println!("candidates: {}", ranked.len());
@@ -116,16 +155,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn Error>> {
         }
         Command::Draft => {
             let (drafts, skipped) = draft::draft(&mut conn, &Policy::default(), now)?;
-            println!("drafted: {}", drafts.len());
-            for (rank, draft) in drafts.iter().enumerate() {
-                let line = quote_line(&draft.quote, &draft.outcome, now);
-                println!("{:>2}. #{:<3} {line}", rank + 1, draft.id);
-                println!("         {}", draft.body);
-            }
-            println!("skipped: {}", skipped.len());
-            for (quote, outcome) in &skipped {
-                println!("    {}", quote_line(quote, outcome, now));
-            }
+            print_draft(&drafts, &skipped, now);
         }
         Command::Approve { id: Some(id), body, .. } => {
             messages::approve(&conn, id, body.as_deref(), now)?;
@@ -169,6 +199,20 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn Error>> {
             println!("sent: {sent}, failed: {failed}, cancelled: {cancelled}");
             if failed > 0 {
                 exit = ExitCode::FAILURE;
+            }
+        }
+        Command::Run { path } => {
+            print_ingest(&ingest::ingest(&mut conn, &path, now)?);
+            let (drafts, skipped) = draft::draft(&mut conn, &Policy::default(), now)?;
+            print_draft(&drafts, &skipped, now);
+        }
+        Command::Outbox => {
+            println!(
+                "id   quote   phone         status     reason              created               attempted             provider     error"
+            );
+            for msg in messages::list(&conn)? {
+                println!("{}", outbox_line(&msg));
+                println!("     {}", msg.body);
             }
         }
     }

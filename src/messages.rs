@@ -11,6 +11,11 @@ pub struct Message {
     pub body: String,
     pub must_edit: bool,
     pub key: String,
+    pub status: String,
+    pub created_at: i64,
+    pub sent_at: Option<i64>,
+    pub provider_id: Option<String>,
+    pub error: Option<String>,
 }
 
 pub trait Sender {
@@ -53,7 +58,8 @@ impl Sender for FakeSender<'_> {
 
 fn select(conn: &Connection, filter: &str) -> rusqlite::Result<Vec<Message>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, quote_id, customer_phone, reason, body, must_edit, idempotency_key
+        "SELECT id, quote_id, customer_phone, reason, body, must_edit, idempotency_key, status,
+                created_at, sent_at, provider_id, error
          FROM messages WHERE {filter} ORDER BY id"
     ))?;
     stmt.query_map([], |row| {
@@ -65,9 +71,19 @@ fn select(conn: &Connection, filter: &str) -> rusqlite::Result<Vec<Message>> {
             body: row.get(4)?,
             must_edit: row.get(5)?,
             key: row.get(6)?,
+            status: row.get(7)?,
+            created_at: row.get(8)?,
+            sent_at: row.get(9)?,
+            provider_id: row.get(10)?,
+            error: row.get(11)?,
         })
     })?
     .collect()
+}
+
+/// Every message, whatever its status.
+pub fn list(conn: &Connection) -> rusqlite::Result<Vec<Message>> {
+    select(conn, "TRUE")
 }
 
 /// Why a guarded update changed no row.
