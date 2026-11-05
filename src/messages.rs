@@ -167,14 +167,15 @@ fn blocked(
         .values()
         .filter(|q| q.open && q.phone == msg.phone)
         .any(|q| q.replies.last() > q.sends.last());
-    // Once a send answers the reply, a must-edit row is outreach like any other.
-    if policy.in_cooldown(quote.phone_last_sent, now) && !(msg.must_edit && replied) {
+    // A must-edit row is the answer, so neither check below applies. Once a send answers the
+    // reply, `replied` is false and the row is outreach like any other.
+    if msg.must_edit && replied {
+        return None;
+    }
+    if policy.in_cooldown(quote.phone_last_sent, now) {
         return Some("cooldown");
     }
-    if !msg.must_edit && replied {
-        return Some("customer replied");
-    }
-    None
+    replied.then_some("customer replied")
 }
 
 #[derive(Debug, PartialEq)]

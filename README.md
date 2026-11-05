@@ -66,7 +66,7 @@ Each open quote is checked against an ordered list of rules. Every matching rule
 | # | Reason | Rule | Why it sits here |
 |---|---|---|---|
 | 1 | unanswered_reply | The customer replied and we have sent nothing since | They reached out, so leaving them waiting is the most costly miss |
-| 2 | xl_quote_stale | $14,000 or more, nothing sent for 3+ days | The most revenue at stake from a single quote |
+| 2 | xl_quote_stale | $11,000 or more, nothing sent for 3+ days | The most revenue at stake from a single quote |
 | 3 | repeat_views | The customer viewed 2+ times since we last sent and never replied | Coming back to the quote is the strongest sign of interest without a reply |
 | 4 | viewed_no_response | The customer viewed within 72 hours and we have sent nothing since | Interest is recent |
 | 5 | never_contacted | We never sent anything and the quote is past minimum age | Nobody has followed up at all |
@@ -96,7 +96,7 @@ The cooldown, closed-quote and reply guardrails are checked when the policy pick
 - **Never a double send.** Drafting again creates nothing while a message is pending; the database allows one pending message per phone. `send` moves each message from `approved` to `sending` with a compare-and-swap, so two runs cannot both send it, then calls the provider with the idempotency key stored on the message. A failed send is retried with the same key: the fake provider returns the original id, so a send whose acknowledgement was lost still ends as one delivered text. A message stuck in `sending` is never retried by the engine, and `outbox` flags it STUCK. Closing its quote cancels it; otherwise clearing one takes a database edit.
 - **A reply is never answered by a template.** A customer whose last reply is after our last send gets an `unanswered_reply` draft: a placeholder that `approve` refuses without `--body` and that `approve --all` skips. If a reply on any open quote on that phone is later than our last send on that quote, `send` cancels the message rather than send a nudge over theirs.
 
-**Possibly delivered texts.** `send` stamps a message before calling the provider. If that message is later cancelled, the stamp still counts for the phone's cooldown, because the text may have arrived. A customer's reply can still be answered. It does not count as a follow-up on the ladder. A text that never arrived costs a 48-hour wait, and that is the safer mistake.
+**Possibly delivered texts.** `send` stamps a message before calling the provider. If that message is later cancelled, the stamp still counts for the phone's cooldown, because the text may have arrived, but not as a follow-up on the ladder. A customer's reply can still be answered. A text that never arrived costs a 48-hour wait, and that is the safer mistake.
 
 `send` trusts `quotes.json` as ingested: a later export that omits a quote leaves it open. An earlier `--now` is replay, so it hides later events.
 

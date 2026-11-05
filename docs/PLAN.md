@@ -23,7 +23,7 @@ Knobs live in one `Policy` struct with defaults. Tests build their own. No CLI o
 |---|---|
 | cooldown per customer phone | 48h |
 | minimum quote age before first nudge | 48h |
-| XL quote | $14,000 and up |
+| XL quote | $11,000 and up |
 | recent view window | 72h |
 | max follow-ups per quote | 6 |
 | nudge ladder, wait after send 1..5 | 48h, 72h, 72h, 7d, 14d |
@@ -74,7 +74,40 @@ Knobs live in one `Policy` struct with defaults. Tests build their own. No CLI o
 ## Phase 4: Approve and send (MVP)
 
 - `approve <id> [--body]` or `approve --all`, which skips must-edit drafts and lists them. A must-edit draft is refused without `--body`. `reject <id>`.
-- `send --now`: for each approved or failed row, recheck quote status, phone cooldown (skipped for a must-edit row while its reply is unanswered), and whether a customer on that phone replied after our last send (cancels unless must-edit). A failed recheck cancels the row with the reason. Then compare-and-swap to sending, call the `Sender`, mark sent with provider id or failed with error. Retries reuse the stored key. Rows stuck in sending are never auto-retried; `outbox` flags them. If the quote closes first, ingest cancels the row like any pending message. An attempted text still counts for the phone's cooldown, because it may have been delivered.
+- `send --now` takes each approved or failed row in id order:
+
+  ```text
+  approved or failed row
+      |
+      v
+  recheck ------- fails ------> cancelled, with the reason
+      |
+      | passes
+      v
+  mark the row sending and record the attempt time (only if it is still approved or failed)
+      |
+      v
+  call Sender with the stored key
+      |
+      +-- ok ---------------> sent, with the provider id
+      +-- error ------------> failed, with the error; the next send starts again at the top
+      +-- crash mid-call ---> stuck in sending
+  ```
+
+  The rechecks run in this order. The first to fail cancels the row and gives the reason:
+
+  1. `quote not open`: the quote is closed or gone.
+  2. `phone changed`: the quote no longer has the row's phone.
+  3. `cooldown`: the phone is inside its cooldown.
+  4. `customer replied`: a reply on any open quote on this phone is later than our last send on that quote.
+
+  Every row gets checks 1 and 2. A must-edit row is the answer to the reply in check 4, so it skips checks 3 and 4 while that reply is unanswered. Once a send answers the reply, the row is checked like any other.
+
+  - Why mark it first: only one run can move a row to `sending`, so two runs cannot both send it. The change is saved before the provider is called, so a crash mid-call leaves a visible `sending` row instead of a row that looks unsent and goes out again. The attempt time goes in `sent_at`, so on any row that did not end as `sent` it means "attempted".
+  - Retries: a failed row reuses its stored key, so the provider cannot deliver it twice.
+  - Stuck rows: a row stuck in `sending` is never auto-retried. `outbox` flags it.
+  - Closed quotes: ingest cancels the row like any pending message, even one stuck in `sending`.
+  - Cooldown: an attempted text still counts for the phone's cooldown, even if its row is later cancelled, because it may have been delivered.
 - `Sender` trait. `FakeSender` writes `provider_outbox`; a repeated key returns the stored provider id. `--fail <quote>` makes it store the message and then error, which is the lost-ack case.
 - Tests: draft twice, one row; second quote on the same phone not drafted while the first is pending; approve must-edit without body refused; send twice, one provider row; stored-then-error retry, same key, one provider row; accepted between approve and send, cancelled; reply after draft, cancelled.
 - README production note: Twilio behind the same trait; if the provider ignores client keys, ambiguous failures are reconciled against the provider, not resent; opt-out footer and quiet hours live in the sender.
